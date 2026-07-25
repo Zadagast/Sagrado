@@ -79,8 +79,25 @@ struct App {
     preview: preview::PreviewState,
 }
 
+/// KDX drew all text with its own bitmap-style font; ChicagoFLF (public
+/// domain) is the closest freely licensed match to that pixel look.
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "ChicagoFLF".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/ChicagoFLF.ttf")).into(),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "ChicagoFLF".to_owned());
+    ctx.set_fonts(fonts);
+}
+
 impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_fonts(&cc.egui_ctx);
         let mut themes = load_appearances();
         if themes.is_empty() {
             themes.push(Theme::new("Built-in"));
