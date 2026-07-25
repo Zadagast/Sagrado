@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sagrado-theme", "crates/sagrado-app"]
+members = ["crates/sagrado-theme", "crates/sagrado-ui", "crates/sagrado-app", "crates/sagrado-textedit"]
 
 [workspace.package]
 version = "0.1.0"

@@ -4,8 +4,8 @@
 use eframe::egui::{self, Align2, Color32, FontId, Rect, StrokeKind, Ui, Vec2};
 use sagrado_theme::Theme;
 
-use crate::paint::SkinTextures;
-use crate::widgets;
+use sagrado_ui::widgets;
+use sagrado_ui::SkinTextures;
 
 pub struct PreviewState {
     text: String,

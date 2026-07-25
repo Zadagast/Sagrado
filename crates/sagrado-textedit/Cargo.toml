@@ -1,12 +1,17 @@
 [package]
-name = "sagrado"
+name = "sagrado-textedit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Sagrado: p2p communications app with a KDX-style skinnable appearance engine"
+description = "Sagrado TextEdit: a fast, skinnable plain-text editor in the KDX style"
+
+[[bin]]
+name = "sagrado-textedit"
+path = "src/main.rs"
 
 [dependencies]
 eframe.workspace = true
 egui.workspace = true
+rfd = "0.15"
 sagrado-theme = { path = "../sagrado-theme" }
 sagrado-ui = { path = "../sagrado-ui" }

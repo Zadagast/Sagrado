@@ -1,12 +1,11 @@
 [package]
-name = "sagrado"
+name = "sagrado-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Sagrado: p2p communications app with a KDX-style skinnable appearance engine"
+description = "Sagrado skinned widgets, 9-slice painter and custom window chrome"
 
 [dependencies]
 eframe.workspace = true
 egui.workspace = true
 sagrado-theme = { path = "../sagrado-theme" }
-sagrado-ui = { path = "../sagrado-ui" }

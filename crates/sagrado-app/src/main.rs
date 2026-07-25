@@ -1,9 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod chrome;
-mod paint;
 mod preview;
-mod widgets;
+
+use sagrado_ui::{chrome, paint};
 
 use std::path::PathBuf;
 

@@ -14,8 +14,15 @@ Original Haxial `.hap` appearance files load natively.
   textures keyed by slot index) and a native importer for Haxial `.hap`
   appearance files (format reverse-engineered; layout documented in
   `src/hap.rs`).
+- `crates/sagrado-ui` — the reusable toolkit: skinned widgets, the 9-slice
+  painter, custom window chrome, and the menu bar / document tab bar. Shared by
+  every Sagrado application.
 - `crates/sagrado-app` — egui application with fully skinned widgets and a
   KDX-style "Preview GUI Items" window with runtime appearance switching.
+- `crates/sagrado-textedit` — **Sagrado TextEdit**, a fast, skinnable plain-text
+  editor modeled on Haxial TextEdit: custom KDX chrome, a File/Tools/Favorites/
+  Location/Appearance menu bar, document tabs, Find/Replace, line sorting,
+  occurrence counting, and soft-wrap.
 
 ## Widgets
 
@@ -27,7 +34,8 @@ fully themed menu.
 ## Running
 
 ```sh
-cargo run -p sagrado
+cargo run -p sagrado             # widget/theme preview
+cargo run -p sagrado-textedit    # Sagrado TextEdit
 ```
 
 Appearance files are loaded from `themes/Appearances/*.hap` (a few original
