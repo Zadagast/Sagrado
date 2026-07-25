@@ -162,6 +162,7 @@ impl eframe::App for App {
                     .show(ui, |ui| {
                         self.preview.show(ui, theme, &self.skin);
                     });
+                chrome::grow_box(ui, theme, &self.skin);
             });
         chrome::window_frame(ctx, &self.themes[self.current]);
         self.current = current;

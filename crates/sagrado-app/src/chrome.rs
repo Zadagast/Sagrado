@@ -157,6 +157,36 @@ fn window_button(
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
+/// Grow box (resize grip) in the bottom-right corner, drawn from the theme
+/// and driving a native window resize.
+pub fn grow_box(ui: &mut Ui, theme: &Theme, skin: &SkinTextures) {
+    let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
+    let slot = if focused {
+        Slot::GrowBoxActive
+    } else {
+        Slot::GrowBoxInactive
+    };
+    let Some(img) = theme.image(slot) else {
+        return;
+    };
+    let [w, h] = img.size();
+    let screen = ui.ctx().screen_rect();
+    let rect = Rect::from_min_size(
+        egui::pos2(screen.right() - w as f32, screen.bottom() - h as f32),
+        Vec2::new(w as f32, h as f32),
+    );
+    if let Some(tex) = skin.get(slot) {
+        nine_slice(ui.painter(), tex, img, rect, Color32::WHITE);
+    }
+    let resp = ui.interact(rect, ui.id().with("grow_box"), Sense::drag());
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        ui.ctx().send_viewport_cmd(ViewportCommand::BeginResize(
+            egui::viewport::ResizeDirection::SouthEast,
+        ));
+    }
+    resp.on_hover_cursor(CursorIcon::ResizeSouthEast);
+}
+
 /// 1px window outline drawn over everything, so the frameless window reads
 /// as a framed KDX window.
 pub fn window_frame(ctx: &egui::Context, theme: &Theme) {

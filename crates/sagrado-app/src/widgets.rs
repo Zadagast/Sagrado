@@ -391,9 +391,9 @@ pub fn popup_button(
 
     // Popup arrows button, right-anchored per its authored positions.
     let slot = if resp.is_pointer_button_down_on() {
-        Slot::PopupButtonHilited
+        Slot::PopupArrowHilited
     } else {
-        Slot::PopupButtonNormal
+        Slot::PopupArrowNormal
     };
     let mut text_right = rect.right() - 6.0;
     if let (Some(tex), Some(img)) = (skin.get(slot), theme.image(slot)) {
