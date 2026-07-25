@@ -432,46 +432,283 @@ pub fn popup_button(
     );
 
     let popup_id = id.with("popup");
+    let mut open = ui
+        .memory(|m| m.data.get_temp::<bool>(popup_id))
+        .unwrap_or(false);
     if resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
+        open = !open;
     }
-    egui::popup_below_widget(
-        ui,
-        popup_id,
-        &resp,
-        egui::PopupCloseBehavior::CloseOnClick,
-        |ui: &mut Ui| {
-            ui.set_min_width(width - 2.0);
-            egui::Frame::new()
-                .fill(c.text_box_background)
-                .stroke((1.0, c.primary_dark))
-                .show(ui, |ui| {
-                    for (i, name) in options.iter().enumerate() {
-                        let checked = i == *selected;
-                        let item = ui.allocate_response(
-                            Vec2::new(ui.available_width().max(width - 6.0), 18.0),
-                            Sense::click(),
-                        );
-                        let (bg, fg) = if item.hovered() || checked {
-                            (c.selection, c.selection_text)
-                        } else {
-                            (c.text_box_background, c.text)
-                        };
-                        ui.painter().rect_filled(item.rect, 0.0, bg);
-                        ui.painter().text(
-                            egui::pos2(item.rect.left() + 6.0, item.rect.center().y),
-                            Align2::LEFT_CENTER,
-                            name,
-                            FontId::proportional(13.0),
-                            fg,
-                        );
-                        if item.clicked() {
-                            *selected = i;
-                        }
+    if open {
+        let item_h = 18.0;
+        let menu_size = Vec2::new(width, options.len() as f32 * item_h + 2.0);
+        let area = egui::Area::new(popup_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.left_bottom() + Vec2::new(0.0, 1.0))
+            .show(ui.ctx(), |ui| {
+                let (menu_rect, _) = ui.allocate_exact_size(menu_size, Sense::hover());
+                let p = ui.painter().clone();
+                p.rect(
+                    menu_rect,
+                    0.0,
+                    c.text_box_background,
+                    (1.0, c.text),
+                    StrokeKind::Inside,
+                );
+                for (i, name) in options.iter().enumerate() {
+                    let item_rect = Rect::from_min_size(
+                        egui::pos2(
+                            menu_rect.left() + 1.0,
+                            menu_rect.top() + 1.0 + i as f32 * item_h,
+                        ),
+                        Vec2::new(menu_rect.width() - 2.0, item_h),
+                    );
+                    let item = ui.interact(item_rect, popup_id.with(i), Sense::click());
+                    let (bg, fg) = if item.hovered() || i == *selected {
+                        (c.selection, c.selection_text)
+                    } else {
+                        (c.text_box_background, c.text)
+                    };
+                    p.rect_filled(item_rect.shrink(1.0), 0.0, bg);
+                    p.text(
+                        egui::pos2(item_rect.left() + 6.0, item_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(13.0),
+                        fg,
+                    );
+                    if item.clicked() {
+                        *selected = i;
+                        open = false;
                     }
-                });
-        },
-    );
+                }
+            });
+        if area.response.clicked_elsewhere() && !resp.clicked() {
+            open = false;
+        }
+    }
+    ui.memory_mut(|m| m.data.insert_temp(popup_id, open));
+    resp
+}
+
+fn scroll_part(
+    ui: &Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    slot: Slot,
+    rect: Rect,
+    stretch: bool,
+) -> bool {
+    match (skin.get(slot), theme.image(slot)) {
+        (Some(tex), Some(img)) => {
+            if stretch {
+                nine_slice(ui.painter(), tex, img, rect, Color32::WHITE);
+            } else {
+                natural(ui.painter(), tex, img, rect, Color32::WHITE);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// KDX-style scrollbar drawn from the theme's track, arrow-button, thumb and
+/// grip images. Returns the response; `value` is 0..=1.
+pub fn scrollbar(
+    ui: &mut Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    length: f32,
+    value: &mut f32,
+    vertical: bool,
+    enabled: bool,
+) -> Response {
+    let track_slot = if vertical {
+        Slot::VScrollTrack
+    } else {
+        Slot::HScrollTrack
+    };
+    let thickness = theme
+        .image(track_slot)
+        .map(|img| {
+            let [w, h] = img.size();
+            if vertical {
+                w as f32
+            } else {
+                h as f32
+            }
+        })
+        .unwrap_or(15.0);
+    let size = if vertical {
+        Vec2::new(thickness, length)
+    } else {
+        Vec2::new(length, thickness)
+    };
+    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+
+    let arrow = thickness;
+    let (dec_rect, inc_rect, trough) = if vertical {
+        (
+            Rect::from_min_size(rect.min, Vec2::new(thickness, arrow)),
+            Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - arrow),
+                Vec2::new(thickness, arrow),
+            ),
+            Rect::from_min_max(
+                egui::pos2(rect.left(), rect.top() + arrow),
+                egui::pos2(rect.right(), rect.bottom() - arrow),
+            ),
+        )
+    } else {
+        (
+            Rect::from_min_size(rect.min, Vec2::new(arrow, thickness)),
+            Rect::from_min_size(
+                egui::pos2(rect.right() - arrow, rect.top()),
+                Vec2::new(arrow, thickness),
+            ),
+            Rect::from_min_max(
+                egui::pos2(rect.left() + arrow, rect.top()),
+                egui::pos2(rect.right() - arrow, rect.bottom()),
+            ),
+        )
+    };
+
+    let trough_len = if vertical {
+        trough.height()
+    } else {
+        trough.width()
+    };
+    let thumb_len = (trough_len * 0.35).clamp(16.0, trough_len.max(16.0));
+    let travel = (trough_len - thumb_len).max(0.0);
+
+    let pointer = resp.interact_pointer_pos();
+    let over = |r: Rect| pointer.is_some_and(|p| r.contains(p));
+    let pressed = resp.is_pointer_button_down_on();
+
+    if enabled && resp.clicked() {
+        if over(dec_rect) {
+            *value = (*value - 0.1).clamp(0.0, 1.0);
+            resp.mark_changed();
+        } else if over(inc_rect) {
+            *value = (*value + 0.1).clamp(0.0, 1.0);
+            resp.mark_changed();
+        }
+    }
+    if enabled && resp.dragged() && travel > 0.0 {
+        if let Some(p) = pointer {
+            let along = if vertical {
+                p.y - trough.top()
+            } else {
+                p.x - trough.left()
+            };
+            *value = ((along - thumb_len / 2.0) / travel).clamp(0.0, 1.0);
+            resp.mark_changed();
+        }
+    }
+
+    let c = theme.colors;
+    if !scroll_part(ui, theme, skin, track_slot, trough, true) {
+        ui.painter().rect(
+            rect,
+            0.0,
+            c.primary_background,
+            (1.0, c.primary_dark),
+            StrokeKind::Inside,
+        );
+    }
+
+    let (dec_slots, inc_slots) = if vertical {
+        (
+            (
+                Slot::VScrollUpNormal,
+                Slot::VScrollUpHilited,
+                Slot::VScrollUpDisabled,
+            ),
+            (
+                Slot::VScrollDownNormal,
+                Slot::VScrollDownHilited,
+                Slot::VScrollDownDisabled,
+            ),
+        )
+    } else {
+        (
+            (
+                Slot::HScrollLeftNormal,
+                Slot::HScrollLeftHilited,
+                Slot::HScrollLeftDisabled,
+            ),
+            (
+                Slot::HScrollRightNormal,
+                Slot::HScrollRightHilited,
+                Slot::HScrollRightDisabled,
+            ),
+        )
+    };
+    for (slots, r) in [(dec_slots, dec_rect), (inc_slots, inc_rect)] {
+        let slot = if !enabled {
+            slots.2
+        } else if pressed && over(r) {
+            slots.1
+        } else {
+            slots.0
+        };
+        if !scroll_part(ui, theme, skin, slot, r, true) {
+            fallback_bevel(ui, r, theme, pressed && over(r));
+        }
+    }
+
+    if enabled && travel >= 0.0 && trough_len >= thumb_len {
+        let start = *value * travel;
+        let thumb_rect = if vertical {
+            Rect::from_min_size(
+                egui::pos2(trough.left(), trough.top() + start),
+                Vec2::new(thickness, thumb_len),
+            )
+        } else {
+            Rect::from_min_size(
+                egui::pos2(trough.left() + start, trough.top()),
+                Vec2::new(thumb_len, thickness),
+            )
+        };
+        let dragging = resp.dragged();
+        let (thumb_slot, grip_slot) = if vertical {
+            (
+                if dragging {
+                    Slot::VScrollThumbHilited
+                } else {
+                    Slot::VScrollThumbNormal
+                },
+                if dragging {
+                    Slot::VScrollGripHilited
+                } else {
+                    Slot::VScrollGripNormal
+                },
+            )
+        } else {
+            (
+                if dragging {
+                    Slot::HScrollThumbHilited
+                } else {
+                    Slot::HScrollThumbNormal
+                },
+                if dragging {
+                    Slot::HScrollGripHilited
+                } else {
+                    Slot::HScrollGripNormal
+                },
+            )
+        };
+        if !scroll_part(ui, theme, skin, thumb_slot, thumb_rect, true) {
+            fallback_bevel(ui, thumb_rect, theme, false);
+        }
+        if let (Some(tex), Some(img)) = (skin.get(grip_slot), theme.image(grip_slot)) {
+            let [w, h] = img.size();
+            let grip_rect = Rect::from_center_size(
+                thumb_rect.center(),
+                Vec2::new(w as f32, h as f32).min(thumb_rect.size()),
+            );
+            natural(ui.painter(), tex, img, grip_rect, Color32::WHITE);
+        }
+    }
     resp
 }
 

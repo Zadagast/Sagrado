@@ -14,6 +14,8 @@ pub struct PreviewState {
     mutex_choice: usize,
     slider: f32,
     progress: f32,
+    scroll_v: f32,
+    scroll_h: f32,
 }
 
 impl Default for PreviewState {
@@ -25,6 +27,8 @@ impl Default for PreviewState {
             mutex_choice: 0,
             slider: 0.35,
             progress: 0.5,
+            scroll_v: 0.0,
+            scroll_h: 0.3,
         }
     }
 }
@@ -42,6 +46,7 @@ impl PreviewState {
         ui.columns(2, |cols| {
             cols[0].vertical(|ui| {
                 self.sample_list(ui, theme, skin);
+                widgets::scrollbar(ui, theme, skin, 190.0, &mut self.scroll_h, false, true);
                 ui.add_space(10.0);
                 widgets::separator(ui, theme, skin, 190.0);
                 ui.add_space(6.0);
@@ -112,7 +117,26 @@ impl PreviewState {
             ("an item", "123K"),
             ("an item", "123K"),
         ];
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(190.0, 66.0), egui::Sense::hover());
+        let list_width = 175.0;
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(list_width, 66.0), egui::Sense::hover());
+        let sb_rect = Rect::from_min_size(
+            egui::pos2(rect.right(), rect.top()),
+            Vec2::new(190.0 - list_width, 66.0),
+        );
+        let mut sb_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(sb_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        widgets::scrollbar(
+            &mut sb_ui,
+            theme,
+            skin,
+            66.0,
+            &mut self.scroll_v,
+            true,
+            true,
+        );
         let p = ui.painter();
         p.rect(
             rect,
