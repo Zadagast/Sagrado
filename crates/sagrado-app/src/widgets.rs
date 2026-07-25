@@ -345,13 +345,24 @@ pub fn column_header(
     text: &str,
     width: f32,
 ) -> Response {
+    let _ = skin;
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::click());
-    let slots = (
-        Slot::ColumnHeaderNormal,
-        Slot::ColumnHeaderHilited,
-        Slot::ColumnHeaderDisabled,
+    let c = theme.colors;
+    let p = ui.painter();
+    p.rect_filled(rect, 0.0, c.primary_background);
+    p.line_segment([rect.left_top(), rect.right_top()], (1.0, c.primary_light));
+    p.line_segment(
+        [rect.left_top(), rect.left_bottom()],
+        (1.0, c.primary_light),
     );
-    draw_states(ui, rect, theme, skin, slots, &resp, true);
+    p.line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        (1.0, c.primary_dark),
+    );
+    p.line_segment(
+        [rect.right_top(), rect.right_bottom()],
+        (1.0, c.primary_dark),
+    );
     ui.painter().text(
         egui::pos2(rect.left() + 6.0, rect.center().y),
         Align2::LEFT_CENTER,

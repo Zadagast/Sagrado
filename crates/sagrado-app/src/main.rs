@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod chrome;
 mod paint;
 mod preview;
 mod widgets;
@@ -13,6 +14,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([460.0, 560.0])
+            .with_decorations(false)
+            .with_transparent(true)
             .with_title("Sagrado — Preview GUI Items"),
         ..Default::default()
     };
@@ -98,39 +101,54 @@ impl eframe::App for App {
         self.skin.set_theme(ctx, theme);
 
         let colors = theme.colors;
-        let panel_frame = egui::Frame::new()
-            .fill(colors.primary_background)
-            .inner_margin(egui::Margin::same(12));
-
-        egui::TopBottomPanel::top("theme_bar")
-            .frame(
-                egui::Frame::new()
-                    .fill(colors.primary_dark)
-                    .inner_margin(egui::Margin::symmetric(12, 6)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.colored_label(colors.selection_text, "Appearance:");
-                    let names: Vec<&str> = self.themes.iter().map(|t| t.name.as_str()).collect();
-                    egui::ComboBox::from_id_salt("theme_picker")
-                        .selected_text(names[self.current])
-                        .show_ui(ui, |ui| {
-                            for (i, name) in names.iter().enumerate() {
-                                ui.selectable_value(&mut self.current, i, *name);
-                            }
-                        });
-                    let t = &self.themes[self.current];
-                    if !t.creator.is_empty() {
-                        ui.colored_label(colors.selection_text, format!("by {}", t.creator));
-                    }
-                });
-            });
-
+        let mut current = self.current;
         egui::CentralPanel::default()
-            .frame(panel_frame)
+            .frame(egui::Frame::new().fill(colors.primary_background))
             .show(ctx, |ui| {
                 let theme = &self.themes[self.current];
-                self.preview.show(ui, theme, &self.skin);
+                chrome::titlebar(ui, theme, &self.skin, "Preview GUI Items");
+                let content = ui
+                    .max_rect()
+                    .with_min_y(ui.max_rect().top() + chrome::titlebar_height(theme));
+                let mut content_ui = ui.new_child(egui::UiBuilder::new().max_rect(content));
+                let ui = &mut content_ui;
+
+                egui::Frame::new()
+                    .fill(colors.primary_dark)
+                    .inner_margin(egui::Margin::symmetric(12, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.colored_label(colors.selection_text, "Appearance:");
+                            egui::ComboBox::from_id_salt("theme_picker")
+                                .selected_text(&self.themes[current].name)
+                                .show_ui(ui, |ui| {
+                                    for i in 0..self.themes.len() {
+                                        ui.selectable_value(&mut current, i, &self.themes[i].name);
+                                    }
+                                });
+                            let t = &self.themes[self.current];
+                            if !t.creator.is_empty() {
+                                ui.colored_label(
+                                    colors.selection_text,
+                                    format!("by {}", t.creator),
+                                );
+                            }
+                        });
+                    });
+
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        self.preview.show(ui, theme, &self.skin);
+                    });
             });
+        egui::Area::new(egui::Id::new("window_frame"))
+            .fixed_pos(egui::pos2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_min_size(ctx.screen_rect().size());
+                chrome::window_frame(ui, &self.themes[self.current]);
+            });
+        self.current = current;
     }
 }
