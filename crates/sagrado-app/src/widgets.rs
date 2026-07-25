@@ -349,19 +349,12 @@ pub fn column_header(
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::click());
     let c = theme.colors;
     let p = ui.painter();
-    p.rect_filled(rect, 0.0, c.primary_background);
-    p.line_segment([rect.left_top(), rect.right_top()], (1.0, c.primary_light));
-    p.line_segment(
-        [rect.left_top(), rect.left_bottom()],
-        (1.0, c.primary_light),
-    );
-    p.line_segment(
-        [rect.left_bottom(), rect.right_bottom()],
-        (1.0, c.primary_dark),
-    );
-    p.line_segment(
-        [rect.right_top(), rect.right_bottom()],
-        (1.0, c.primary_dark),
+    p.rect(
+        rect,
+        0.0,
+        c.text_box_background,
+        (1.0, c.text),
+        StrokeKind::Inside,
     );
     ui.painter().text(
         egui::pos2(rect.left() + 6.0, rect.center().y),
@@ -545,29 +538,54 @@ pub fn scrollbar(
     };
     let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
+    // KDX places a decrement/increment arrow pair at both ends of the bar.
     let arrow = thickness;
-    let (dec_rect, inc_rect, trough) = if vertical {
+    let (dec_rects, inc_rects, trough) = if vertical {
         (
-            Rect::from_min_size(rect.min, Vec2::new(thickness, arrow)),
-            Rect::from_min_size(
-                egui::pos2(rect.left(), rect.bottom() - arrow),
-                Vec2::new(thickness, arrow),
-            ),
+            [
+                Rect::from_min_size(rect.min, Vec2::new(thickness, arrow)),
+                Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.bottom() - 2.0 * arrow),
+                    Vec2::new(thickness, arrow),
+                ),
+            ],
+            [
+                Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.top() + arrow),
+                    Vec2::new(thickness, arrow),
+                ),
+                Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.bottom() - arrow),
+                    Vec2::new(thickness, arrow),
+                ),
+            ],
             Rect::from_min_max(
-                egui::pos2(rect.left(), rect.top() + arrow),
-                egui::pos2(rect.right(), rect.bottom() - arrow),
+                egui::pos2(rect.left(), rect.top() + 2.0 * arrow),
+                egui::pos2(rect.right(), rect.bottom() - 2.0 * arrow),
             ),
         )
     } else {
         (
-            Rect::from_min_size(rect.min, Vec2::new(arrow, thickness)),
-            Rect::from_min_size(
-                egui::pos2(rect.right() - arrow, rect.top()),
-                Vec2::new(arrow, thickness),
-            ),
+            [
+                Rect::from_min_size(rect.min, Vec2::new(arrow, thickness)),
+                Rect::from_min_size(
+                    egui::pos2(rect.right() - 2.0 * arrow, rect.top()),
+                    Vec2::new(arrow, thickness),
+                ),
+            ],
+            [
+                Rect::from_min_size(
+                    egui::pos2(rect.left() + arrow, rect.top()),
+                    Vec2::new(arrow, thickness),
+                ),
+                Rect::from_min_size(
+                    egui::pos2(rect.right() - arrow, rect.top()),
+                    Vec2::new(arrow, thickness),
+                ),
+            ],
             Rect::from_min_max(
-                egui::pos2(rect.left() + arrow, rect.top()),
-                egui::pos2(rect.right() - arrow, rect.bottom()),
+                egui::pos2(rect.left() + 2.0 * arrow, rect.top()),
+                egui::pos2(rect.right() - 2.0 * arrow, rect.bottom()),
             ),
         )
     };
@@ -585,10 +603,10 @@ pub fn scrollbar(
     let pressed = resp.is_pointer_button_down_on();
 
     if enabled && resp.clicked() {
-        if over(dec_rect) {
+        if dec_rects.iter().any(|r| over(*r)) {
             *value = (*value - 0.1).clamp(0.0, 1.0);
             resp.mark_changed();
-        } else if over(inc_rect) {
+        } else if inc_rects.iter().any(|r| over(*r)) {
             *value = (*value + 0.1).clamp(0.0, 1.0);
             resp.mark_changed();
         }
@@ -643,7 +661,12 @@ pub fn scrollbar(
             ),
         )
     };
-    for (slots, r) in [(dec_slots, dec_rect), (inc_slots, inc_rect)] {
+    for (slots, r) in [
+        (dec_slots, dec_rects[0]),
+        (dec_slots, dec_rects[1]),
+        (inc_slots, inc_rects[0]),
+        (inc_slots, inc_rects[1]),
+    ] {
         let slot = if !enabled {
             slots.2
         } else if pressed && over(r) {
