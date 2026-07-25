@@ -1,0 +1,6 @@
+[meta]
+name = "Colors only"
+
+[colors]
+primary_background = "#123456"
+alert = "#fedcba"

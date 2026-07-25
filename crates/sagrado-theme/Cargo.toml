@@ -1,0 +1,12 @@
+[package]
+name = "sagrado-theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UI-agnostic theme format and loader for Sagrado"
+
+[dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+thiserror = "=2.0.19"
+toml = "=0.8.23"

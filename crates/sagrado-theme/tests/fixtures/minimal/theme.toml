@@ -1,0 +1,17 @@
+[meta]
+name = "Fixture"
+author = "Sagrado"
+version = "1.0"
+description = "Loader fixture"
+
+[colors]
+text = "#112233"
+selection = "#aabbccdd"
+
+[slot.button]
+image = "images/button-normal.png"
+caps = [1, 2, 3, 4]
+text = "#ffffff"
+anchor = "left"
+offset = [2, -1]
+insets = [1, 2, 3, 4]
