@@ -60,7 +60,10 @@ pub fn push_button(
         .layout_no_wrap(text.to_owned(), font.clone(), theme.colors.text)
         .size()
         .x;
-    let size = Vec2::new(galley_width + 28.0, 22.0);
+    // A default button is drawn 3 pixels larger on every side than a
+    // regular button (Appearance Engine rule).
+    let pad = if default { 3.0 } else { 0.0 };
+    let size = Vec2::new(galley_width + 28.0 + 2.0 * pad, 22.0 + 2.0 * pad);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let slots = if default {
         (
@@ -79,7 +82,7 @@ pub fn push_button(
     let text_color = if enabled {
         theme.colors.text
     } else {
-        theme.colors.primary_dark
+        theme.colors.disabled_text
     };
     ui.painter()
         .text(rect.center(), Align2::CENTER_CENTER, text, font, text_color);
@@ -163,7 +166,12 @@ fn toggle_button(
         .layout_no_wrap(label.to_owned(), font.clone(), theme.colors.text)
         .size()
         .x;
-    let box_size = 14.0;
+    // Tick/mutex images have a maximum height of 18 pixels; draw them at
+    // their natural size.
+    let box_size = theme
+        .image(blank.0)
+        .map(|img| img.size()[0] as f32)
+        .unwrap_or(14.0);
     let (rect, mut resp) =
         ui.allocate_exact_size(Vec2::new(box_size + 6.0 + text_width, 18.0), Sense::click());
     if resp.clicked() && enabled {
@@ -214,7 +222,7 @@ fn toggle_button(
     let text_color = if enabled {
         theme.colors.text
     } else {
-        theme.colors.primary_dark
+        theme.colors.disabled_text
     };
     ui.painter().text(
         egui::pos2(rect.left() + box_size + 6.0, rect.center().y),
@@ -300,16 +308,17 @@ fn scrollbar(
     };
     let track_img = theme.image(track_slot);
 
-    // Bar thickness comes from the theme's track image; arrows never stretch,
-    // so their extents are the track's 9-slice caps along the scroll axis.
+    // Scrollbar images are complete bars (16 px thick in original themes);
+    // arrows never stretch, so their extents are the track's 9-slice caps
+    // along the scroll axis (caps order: left, top, right, bottom).
     let (thickness, arrow_a, arrow_b) = match track_img {
         Some(img) => {
             let [w, h] = img.size();
             let caps = img.caps.map(f32::from);
             if horizontal {
-                (h as f32, caps[0].max(4.0), caps[1].max(4.0))
+                (h as f32, caps[0].max(4.0), caps[2].max(4.0))
             } else {
-                (w as f32, caps[2].max(4.0), caps[3].max(4.0))
+                (w as f32, caps[1].max(4.0), caps[3].max(4.0))
             }
         }
         None => (16.0, 16.0, 16.0),
@@ -436,9 +445,31 @@ fn scrollbar(
                 Vec2::new(thickness, thumb_len),
             )
         };
+        let grips_slot = if dragging {
+            if horizontal {
+                Slot::HScrollGripsHilited
+            } else {
+                Slot::VScrollGripsHilited
+            }
+        } else if horizontal {
+            Slot::HScrollGripsNormal
+        } else {
+            Slot::VScrollGripsNormal
+        };
         match (skin.get(thumb_slot), theme.image(thumb_slot)) {
             (Some(tex), Some(img)) => {
-                nine_slice(ui.painter(), tex, img, thumb_rect, Color32::WHITE)
+                nine_slice(ui.painter(), tex, img, thumb_rect, Color32::WHITE);
+                if let (Some(gtex), Some(gimg)) = (skin.get(grips_slot), theme.image(grips_slot)) {
+                    let [gw, gh] = gimg.size();
+                    let fits = if horizontal {
+                        thumb_rect.width() >= gw as f32 + 4.0
+                    } else {
+                        thumb_rect.height() >= gh as f32 + 4.0
+                    };
+                    if fits {
+                        natural(ui.painter(), gtex, gimg, thumb_rect, Color32::WHITE);
+                    }
+                }
             }
             _ => {
                 let c = theme.colors;
@@ -481,7 +512,7 @@ pub fn popup_button(
     let text_inset = match (skin.get(body_slot), theme.image(body_slot)) {
         (Some(tex), Some(img)) => {
             nine_slice(ui.painter(), tex, img, rect, Color32::WHITE);
-            f32::from(img.positions[0]).max(8.0)
+            img.cap_left().max(8.0)
         }
         _ => {
             fallback_bevel(ui, rect, theme, open);
@@ -498,12 +529,26 @@ pub fn popup_button(
     };
     match (skin.get(symbol_slot), theme.image(symbol_slot)) {
         (Some(tex), Some(img)) => {
-            let [w, _] = img.size();
-            let sym_rect = Rect::from_min_max(
-                egui::pos2(rect.right() - w as f32 - 4.0, rect.top()),
-                rect.max,
-            );
-            natural(ui.painter(), tex, img, sym_rect, Color32::WHITE);
+            // Symbol anchoring: a nonzero left position wins over right;
+            // top wins over bottom; with no vertical position the symbol is
+            // vertically centered.
+            let [w, h] = img.size();
+            let (w, h) = (w as f32, h as f32);
+            let x = if img.pos_left() > 0.0 {
+                rect.left() + img.pos_left()
+            } else if img.pos_right() > 0.0 {
+                rect.right() - img.pos_right() - w
+            } else {
+                rect.right() - 4.0 - w
+            };
+            let y = if img.pos_top() > 0.0 {
+                rect.top() + img.pos_top()
+            } else if img.pos_bottom() > 0.0 {
+                rect.bottom() - img.pos_bottom() - h
+            } else {
+                rect.center().y - h / 2.0
+            };
+            crate::paint::natural_at(ui.painter(), tex, img, egui::pos2(x, y), Color32::WHITE);
         }
         _ => {
             ui.painter().text(
@@ -519,7 +564,7 @@ pub fn popup_button(
     let text_color = if enabled {
         theme.colors.text
     } else {
-        theme.colors.primary_dark
+        theme.colors.disabled_text
     };
     if let Some(label) = items.get(*selected) {
         ui.painter().text(
@@ -637,7 +682,24 @@ pub fn h_slider(
     let x = rect.left() + *value * rect.width();
     let ind_rect = Rect::from_center_size(egui::pos2(x, rect.center().y), Vec2::splat(16.0));
     match (skin.get(ind_slot), theme.image(ind_slot)) {
-        (Some(tex), Some(img)) => natural(ui.painter(), tex, img, ind_rect, Color32::WHITE),
+        (Some(tex), Some(img)) => {
+            // The indicator's top position places it that many pixels above
+            // the top of the bar.
+            let w = img.size()[0] as f32;
+            let bar_h = theme
+                .image(bar_slot)
+                .map(|b| b.size()[1] as f32)
+                .unwrap_or(8.0);
+            let bar_top = rect.center().y - bar_h / 2.0;
+            let top = bar_top - img.pos_top();
+            crate::paint::natural_at(
+                ui.painter(),
+                tex,
+                img,
+                egui::pos2(x - w / 2.0, top.max(rect.top())),
+                Color32::WHITE,
+            );
+        }
         _ => {
             ui.painter().circle(
                 ind_rect.center(),
@@ -663,8 +725,8 @@ pub fn progress_bar(ui: &mut Ui, theme: &Theme, skin: &SkinTextures, fraction: f
             let h = bar_img.size()[1] as f32;
             let bar_rect = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), h));
             nine_slice(ui.painter(), bar_tex, bar_img, bar_rect, Color32::WHITE);
-            // Fill positions: [left, right, top, bottom] insets into the bar.
-            let [l, r, t, b] = fill_img.positions.map(f32::from);
+            // Fill positions: [left, top, right, bottom] insets into the bar.
+            let [l, t, r, b] = fill_img.positions.map(f32::from);
             let inner = Rect::from_min_max(
                 egui::pos2(bar_rect.left() + l, bar_rect.top() + t),
                 egui::pos2(bar_rect.right() - r, bar_rect.bottom() - b),

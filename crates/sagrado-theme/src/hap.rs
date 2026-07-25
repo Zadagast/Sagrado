@@ -18,8 +18,8 @@
 //! u16 flags_bpp   (high byte: bit0 = transparency active; low byte: bpp 1/2/4/8)
 //! u8  max_palette_index, u8 transparent_palette_index
 //! u32 transparent color (0x00RRGGBB, informational)
-//! u8[4] caps      (left, right, top, bottom)
-//! u8[4] positions (left, right, top, bottom)
+//! u8[4] caps      (left, top, right, bottom)
+//! u8[4] positions (left, top, right, bottom)
 //! u32[max_palette_index+1] palette
 //! rows of packed indices, each row padded to a 4-byte boundary
 //! ```

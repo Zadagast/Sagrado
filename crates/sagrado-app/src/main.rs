@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod chrome;
 mod paint;
 mod preview;
 mod widgets;
@@ -13,6 +14,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([460.0, 560.0])
+            .with_decorations(false)
             .with_title("Sagrado — Preview GUI Items"),
         ..Default::default()
     };
@@ -99,40 +101,39 @@ impl eframe::App for App {
 
         let colors = theme.colors;
         let mut current = self.current;
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(colors.primary_background))
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(colors.primary_dark)
-                    .inner_margin(egui::Margin::symmetric(12, 6))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.colored_label(colors.selection_text, "Appearance:");
-                            egui::ComboBox::from_id_salt("theme_picker")
-                                .selected_text(&self.themes[current].name)
-                                .show_ui(ui, |ui| {
-                                    for i in 0..self.themes.len() {
-                                        ui.selectable_value(&mut current, i, &self.themes[i].name);
-                                    }
-                                });
-                            let t = &self.themes[self.current];
-                            if !t.creator.is_empty() {
-                                ui.colored_label(
-                                    colors.selection_text,
-                                    format!("by {}", t.creator),
-                                );
-                            }
-                        });
+        let themes = &self.themes;
+        let skin = &self.skin;
+        let preview = &mut self.preview;
+        chrome::window_frame(ctx, theme, skin, "Preview GUI Items", |ui| {
+            egui::Frame::new()
+                .fill(colors.primary_dark)
+                .inner_margin(egui::Margin::symmetric(12, 6))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.colored_label(colors.selection_text, "Appearance:");
+                        egui::ComboBox::from_id_salt("theme_picker")
+                            .selected_text(&themes[current].name)
+                            .show_ui(ui, |ui| {
+                                for (i, t) in themes.iter().enumerate() {
+                                    ui.selectable_value(&mut current, i, &t.name);
+                                }
+                            });
+                        if !theme.creator.is_empty() {
+                            ui.colored_label(
+                                colors.selection_text,
+                                format!("by {}", theme.creator),
+                            );
+                        }
                     });
+                });
 
-                let theme = &self.themes[self.current];
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::same(12))
-                    .show(ui, |ui| {
-                        self.preview.show(ui, theme, &self.skin);
-                    });
-            });
+            egui::Frame::new()
+                .inner_margin(egui::Margin::same(12))
+                .show(ui, |ui| {
+                    preview.show(ui, theme, skin);
+                });
+        });
         self.current = current;
     }
 }
