@@ -159,9 +159,13 @@ fn window_button(
 
 /// 1px window outline drawn over everything, so the frameless window reads
 /// as a framed KDX window.
-pub fn window_frame(ui: &Ui, theme: &Theme) {
-    ui.painter().rect(
-        ui.max_rect(),
+pub fn window_frame(ctx: &egui::Context, theme: &Theme) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("window_frame"),
+    ));
+    painter.rect(
+        ctx.screen_rect(),
         0.0,
         Color32::TRANSPARENT,
         (1.0, theme.colors.text),

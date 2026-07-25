@@ -15,7 +15,6 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([460.0, 560.0])
             .with_decorations(false)
-            .with_transparent(true)
             .with_title("Sagrado — Preview GUI Items"),
         ..Default::default()
     };
@@ -147,12 +146,7 @@ impl eframe::App for App {
                         self.preview.show(ui, theme, &self.skin);
                     });
             });
-        egui::Area::new(egui::Id::new("window_frame"))
-            .fixed_pos(egui::pos2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_min_size(ctx.screen_rect().size());
-                chrome::window_frame(ui, &self.themes[self.current]);
-            });
+        chrome::window_frame(ctx, &self.themes[self.current]);
         self.current = current;
     }
 }
