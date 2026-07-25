@@ -48,7 +48,7 @@ pub fn nine_slice(
 ) {
     let [iw, ih] = skin.size();
     let (iw, ih) = (iw as f32, ih as f32);
-    let [l, r, t, b] = skin.caps.map(f32::from);
+    let [l, t, r, b] = skin.caps.map(f32::from);
     let (l, r) = (l.min(iw / 2.0), r.min(iw / 2.0));
     let (t, b) = (t.min(ih / 2.0), b.min(ih / 2.0));
 

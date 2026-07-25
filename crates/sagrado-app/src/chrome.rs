@@ -115,8 +115,8 @@ pub fn titlebar(ui: &mut Ui, theme: &Theme, skin: &SkinTextures, title: &str) {
 }
 
 /// Draw one titlebar button using the authored `positions` of its normal
-/// image: `[left, right, top, bottom]` offsets within the titlebar
-/// (left of 0 means right-aligned, per the AppearanceEdit docs).
+/// image: `[left, top, right, bottom]` offsets within the titlebar.
+/// A zero left with a nonzero right means the button is right-anchored.
 fn window_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -130,7 +130,7 @@ fn window_button(
     };
     let [w, h] = normal.size();
     let (w, h) = (w as f32, h as f32);
-    let [l, r, t, _b] = normal.positions.map(f32::from);
+    let [l, t, r, _b] = normal.positions.map(f32::from);
     let x = if l > 0.0 {
         bar.left() + l
     } else {

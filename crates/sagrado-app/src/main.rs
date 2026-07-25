@@ -120,13 +120,17 @@ impl eframe::App for App {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.colored_label(colors.selection_text, "Appearance:");
-                            egui::ComboBox::from_id_salt("theme_picker")
-                                .selected_text(&self.themes[current].name)
-                                .show_ui(ui, |ui| {
-                                    for i in 0..self.themes.len() {
-                                        ui.selectable_value(&mut current, i, &self.themes[i].name);
-                                    }
-                                });
+                            let names: Vec<String> =
+                                self.themes.iter().map(|t| t.name.clone()).collect();
+                            widgets::popup_button(
+                                ui,
+                                theme,
+                                &self.skin,
+                                egui::Id::new("theme_picker"),
+                                &names,
+                                &mut current,
+                                180.0,
+                            );
                             let t = &self.themes[self.current];
                             if !t.creator.is_empty() {
                                 ui.colored_label(

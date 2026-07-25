@@ -305,8 +305,8 @@ pub fn progress_bar(ui: &mut Ui, theme: &Theme, skin: &SkinTextures, fraction: f
             let h = bar_img.size()[1] as f32;
             let bar_rect = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), h));
             nine_slice(ui.painter(), bar_tex, bar_img, bar_rect, Color32::WHITE);
-            // Fill positions: [left, right, top, bottom] insets into the bar.
-            let [l, r, t, b] = fill_img.positions.map(f32::from);
+            // Fill positions: [left, top, right, bottom] insets into the bar.
+            let [l, t, r, b] = fill_img.positions.map(f32::from);
             let inner = Rect::from_min_max(
                 egui::pos2(bar_rect.left() + l, bar_rect.top() + t),
                 egui::pos2(bar_rect.right() - r, bar_rect.bottom() - b),
@@ -369,6 +369,108 @@ pub fn column_header(
         text,
         FontId::proportional(12.0),
         theme.colors.text,
+    );
+    resp
+}
+
+/// KDX-style popup button: a recessed text field with the theme's popup
+/// arrows image right-anchored, opening a themed menu of options.
+pub fn popup_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    id: egui::Id,
+    options: &[String],
+    selected: &mut usize,
+    width: f32,
+) -> Response {
+    let c = theme.colors;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::click());
+    let p = ui.painter();
+    p.rect_filled(rect, 0.0, c.text_box_background);
+    p.rect(
+        rect,
+        0.0,
+        Color32::TRANSPARENT,
+        (1.0, c.primary_dark),
+        StrokeKind::Inside,
+    );
+
+    // Popup arrows button, right-anchored per its authored positions.
+    let slot = if resp.is_pointer_button_down_on() {
+        Slot::PopupButtonHilited
+    } else {
+        Slot::PopupButtonNormal
+    };
+    let mut text_right = rect.right() - 6.0;
+    if let (Some(tex), Some(img)) = (skin.get(slot), theme.image(slot)) {
+        let [w, h] = img.size();
+        let (w, h) = (w as f32, h as f32);
+        let [l, _t, r, _b] = img.positions.map(f32::from);
+        let x = if l > 0.0 {
+            rect.left() + l
+        } else {
+            rect.right() - r - w
+        };
+        let arrows = Rect::from_min_size(
+            egui::pos2(x, rect.top() + (rect.height() - h) / 2.0),
+            Vec2::new(w, h),
+        );
+        nine_slice(p, tex, img, arrows, Color32::WHITE);
+        text_right = arrows.left() - 4.0;
+    }
+    let clip = p.with_clip_rect(Rect::from_min_max(
+        rect.min,
+        egui::pos2(text_right, rect.bottom()),
+    ));
+    clip.text(
+        egui::pos2(rect.left() + 6.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        options.get(*selected).map(String::as_str).unwrap_or(""),
+        FontId::proportional(13.0),
+        c.text,
+    );
+
+    let popup_id = id.with("popup");
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+    egui::popup_below_widget(
+        ui,
+        popup_id,
+        &resp,
+        egui::PopupCloseBehavior::CloseOnClick,
+        |ui: &mut Ui| {
+            ui.set_min_width(width - 2.0);
+            egui::Frame::new()
+                .fill(c.text_box_background)
+                .stroke((1.0, c.primary_dark))
+                .show(ui, |ui| {
+                    for (i, name) in options.iter().enumerate() {
+                        let checked = i == *selected;
+                        let item = ui.allocate_response(
+                            Vec2::new(ui.available_width().max(width - 6.0), 18.0),
+                            Sense::click(),
+                        );
+                        let (bg, fg) = if item.hovered() || checked {
+                            (c.selection, c.selection_text)
+                        } else {
+                            (c.text_box_background, c.text)
+                        };
+                        ui.painter().rect_filled(item.rect, 0.0, bg);
+                        ui.painter().text(
+                            egui::pos2(item.rect.left() + 6.0, item.rect.center().y),
+                            Align2::LEFT_CENTER,
+                            name,
+                            FontId::proportional(13.0),
+                            fg,
+                        );
+                        if item.clicked() {
+                            *selected = i;
+                        }
+                    }
+                });
+        },
     );
     resp
 }
