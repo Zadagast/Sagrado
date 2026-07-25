@@ -16,7 +16,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("no themes found in {}", themes_dir.display()).into());
     }
 
-    let first_name = themes.keys().next().cloned().unwrap_or_default();
+    let mut names = themes.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    let first_name = names.first().cloned().unwrap_or_default();
     let active_theme = themes
         .get(&first_name)
         .cloned()
@@ -26,9 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_theme_renderer(&gallery, renderer.clone());
     gallery.global::<sagrado_ui::ThemeRuntime>().set_revision(0);
 
-    let names = themes
-        .keys()
-        .cloned()
+    let names = names
+        .into_iter()
         .map(SharedString::from)
         .collect::<Vec<_>>();
     gallery.set_theme_options(Rc::new(VecModel::from(names)).into());

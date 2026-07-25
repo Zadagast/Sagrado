@@ -1,0 +1,107 @@
+[meta]
+name = "Platinum"
+author = "Sagrado"
+version = "1.0"
+description = "Classic Platinum-inspired cool gray skin with Aqua accents"
+
+[colors]
+text = "#111111"
+primary_light = "#ffffff"
+primary_background = "#d0d0d0"
+primary_dark = "#747474"
+primary_frame = "#707070"
+selection = "#3b78c5"
+selection_text = "#ffffff"
+text_box_background = "#ffffff"
+menu_background = "#eeeeee"
+menu_text = "#111111"
+alert = "#c94f4f"
+alert_text = "#ffffff"
+
+[slot.button]
+image = "images/button-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.default_button]
+image = "images/default_button-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.popup_button]
+image = "images/popup_button-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.tick_blank]
+image = "images/tick_blank-normal.png"
+caps = [2, 2, 2, 2]
+
+[slot.tick_ticked]
+image = "images/tick_ticked-normal.png"
+caps = [2, 2, 2, 2]
+
+[slot.mutex_blank]
+image = "images/mutex_blank-normal.png"
+caps = [2, 2, 2, 2]
+
+[slot.mutex_ticked]
+image = "images/mutex_ticked-normal.png"
+caps = [2, 2, 2, 2]
+
+[slot.text_box]
+image = "images/text_box-normal.png"
+caps = [2, 2, 2, 2]
+
+[slot.column_header]
+image = "images/column_header-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.box]
+image = "images/box-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.h_slider_bar]
+image = "images/h_slider_bar-normal.png"
+caps = [3, 0, 3, 0]
+
+[slot.h_slider_indicator]
+image = "images/h_slider_indicator-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.progress_bar]
+image = "images/progress_bar-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.progress_fill]
+image = "images/progress_fill-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.h_scrollbar_track]
+image = "images/h_scrollbar_track-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.h_scrollbar_thumb]
+image = "images/h_scrollbar_thumb-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.v_scrollbar_track]
+image = "images/v_scrollbar_track-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.v_scrollbar_thumb]
+image = "images/v_scrollbar_thumb-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.horiz_separator]
+image = "images/horiz_separator-normal.png"
+caps = [0, 0, 0, 0]
+
+[slot.vert_separator]
+image = "images/vert_separator-normal.png"
+caps = [0, 0, 0, 0]
+
+[slot.menu_background]
+image = "images/menu_background-normal.png"
+caps = [3, 3, 3, 3]
+
+[slot.window_frame]
+image = "images/window_frame-normal.png"
+caps = [4, 20, 4, 4]

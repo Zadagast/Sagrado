@@ -44,14 +44,20 @@ impl ThemeRenderer {
                 height: 0,
             });
         };
-        let Some(slot_id) = slot_name.parse::<SlotId>().ok() else {
-            return image_from_buffer(fallback_widget(&theme.colors, SlotId::Box, width, height));
-        };
         let slot_state = match state {
             1 => SlotState::Hilited,
             2 => SlotState::Disabled,
             3 => SlotState::Focus,
             _ => SlotState::Normal,
+        };
+        let Some(slot_id) = slot_name.parse::<SlotId>().ok() else {
+            return image_from_buffer(fallback_widget(
+                &theme.colors,
+                SlotId::Box,
+                slot_state,
+                width,
+                height,
+            ));
         };
         let buffer = theme
             .slots
@@ -62,7 +68,7 @@ impl ThemeRenderer {
                     .or_else(|| slot.images.get(&SlotState::Normal))
                     .map(|image| nine_slice(image, slot.caps, width, height))
             })
-            .unwrap_or_else(|| fallback_widget(&theme.colors, slot_id, width, height));
+            .unwrap_or_else(|| fallback_widget(&theme.colors, slot_id, slot_state, width, height));
         image_from_buffer(buffer)
     }
 
@@ -73,6 +79,7 @@ impl ThemeRenderer {
         };
         let color = match name {
             "primary-light" => theme.colors.primary_light,
+            "primary-background" => theme.colors.primary_background,
             "primary-dark" => theme.colors.primary_dark,
             "primary-frame" => theme.colors.primary_frame,
             "selection" => theme.colors.selection,

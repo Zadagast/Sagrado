@@ -5,7 +5,7 @@
 //! tiling) is deliberate: it keeps runtime rendering deterministic for
 //! arbitrary widget sizes and lets a renderer upload one finished RGBA buffer.
 
-use crate::{Caps, Color, SlotId, SlotImage, ThemeColors};
+use crate::{Caps, Color, SlotId, SlotImage, SlotState, ThemeColors};
 
 /// A renderer-independent RGBA8 pixel buffer.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,26 +69,208 @@ pub fn nine_slice(
     output
 }
 
-/// Paints a simple beveled fallback when a slot has no image.
-pub fn fallback_widget(colors: &ThemeColors, _slot: SlotId, width: u32, height: u32) -> RgbaBuffer {
+/// How a slot with no image should be synthesized from the color table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FallbackKind {
+    /// A raised control: vertical gradient, dark border, light top highlight.
+    Raised,
+    /// A sunken well: near-white fill with an inset (dark top/left) border.
+    Recessed,
+    /// A saturated progress/selection fill.
+    Accent,
+    /// A flat panel with a single-pixel border.
+    Panel,
+    /// A thin engraved separator line, centered in its box.
+    Separator,
+}
+
+impl FallbackKind {
+    fn of(slot: SlotId) -> Self {
+        use SlotId::*;
+        match slot {
+            Button
+            | DefaultButton
+            | IconButton
+            | PopupButton
+            | PopupButtonNoTitle
+            | ColumnHeader
+            | HSliderIndicator
+            | VSliderIndicator
+            | HSliderPointedIndicator
+            | VSliderPointedIndicator
+            | HScrollBarThumb
+            | VScrollBarThumb
+            | WindowClose
+            | WindowMinimize
+            | WindowMaximize
+            | WindowMenu
+            | WindowResize
+            | MenuBarTitle
+            | PlusMinus => Self::Raised,
+            TextBox | FocusBox | ProgressBar | HSliderBar | VSliderBar | HScrollBarTrack
+            | VScrollBarTrack | TickBlank | MutexBlank | TickTristated | MutexTristated => {
+                Self::Recessed
+            }
+            ProgressFill | TickTicked | MutexTicked => Self::Accent,
+            HorizSeparator | VertSeparator | MenuSeparator => Self::Separator,
+            _ => Self::Panel,
+        }
+    }
+
+    fn corner_radius(self) -> u32 {
+        match self {
+            Self::Raised => 2,
+            Self::Recessed | Self::Accent => 1,
+            _ => 0,
+        }
+    }
+}
+
+/// Paints a skeuomorphic fallback when a slot has no image: a vertical
+/// gradient with beveled edges synthesized from the theme's color table, so
+/// even a colors-only theme reads as a real 3D widget kit rather than flat
+/// rectangles.
+pub fn fallback_widget(
+    colors: &ThemeColors,
+    slot: SlotId,
+    state: SlotState,
+    width: u32,
+    height: u32,
+) -> RgbaBuffer {
     let mut output = RgbaBuffer {
         rgba: vec![0; width.saturating_mul(height).saturating_mul(4) as usize],
         width,
         height,
     };
+    if width == 0 || height == 0 {
+        return output;
+    }
+    let kind = FallbackKind::of(slot);
+    let radius = kind.corner_radius().min(width / 2).min(height / 2);
+
+    let (mut top, mut bottom) = match kind {
+        FallbackKind::Raised => (
+            blend(colors.primary_background, colors.primary_light, 0.75),
+            blend(colors.primary_background, colors.primary_dark, 0.35),
+        ),
+        FallbackKind::Recessed => (
+            colors.text_box_background,
+            blend(colors.text_box_background, colors.primary_background, 0.5),
+        ),
+        FallbackKind::Accent => (
+            blend(colors.selection, colors.primary_light, 0.4),
+            colors.selection,
+        ),
+        FallbackKind::Panel | FallbackKind::Separator => {
+            (colors.primary_background, colors.primary_background)
+        }
+    };
+    let mut frame = colors.primary_frame;
+    let mut light = colors.primary_light;
+    let mut dark = colors.primary_dark;
+    let mut accent = colors.selection;
+    match state {
+        SlotState::Normal => {}
+        SlotState::Hilited => {
+            // Pressed controls read as inset: darken the fill and reverse the
+            // bevel so the upper/left edge becomes the shadow.
+            top = blend(top, colors.primary_dark, 0.28);
+            bottom = blend(bottom, colors.primary_dark, 0.18);
+            std::mem::swap(&mut light, &mut dark);
+            frame = blend(frame, colors.primary_dark, 0.25);
+        }
+        SlotState::Disabled => {
+            // Blend toward the panel background to desaturate without
+            // requiring extra theme colors.
+            let background = colors.primary_background;
+            top = blend(top, background, 0.58);
+            bottom = blend(bottom, background, 0.68);
+            frame = blend(frame, background, 0.62);
+            light = blend(light, background, 0.6);
+            dark = blend(dark, background, 0.6);
+            accent = blend(accent, background, 0.62);
+            top.alpha = top.alpha.saturating_mul(3) / 4;
+            bottom.alpha = bottom.alpha.saturating_mul(3) / 4;
+        }
+        SlotState::Focus => {
+            // A restrained accent tint distinguishes keyboard focus while
+            // preserving the normal raised/recessed treatment.
+            top = blend(top, colors.selection, 0.12);
+            bottom = blend(bottom, colors.selection, 0.08);
+            frame = blend(frame, colors.selection, 0.42);
+            accent = blend(accent, colors.selection, 0.2);
+        }
+    }
+
+    let last_x = width - 1;
+    let last_y = height - 1;
     for y in 0..height {
+        let t = if height > 1 {
+            y as f32 / last_y as f32
+        } else {
+            0.0
+        };
+        let base = blend(top, bottom, t);
         for x in 0..width {
-            let color = if x == 0 || y == 0 {
-                colors.primary_light
-            } else if x + 1 >= width || y + 1 >= height {
-                colors.primary_dark
-            } else {
-                colors.primary_background
+            if in_clipped_corner(x, y, last_x, last_y, radius) {
+                continue;
+            }
+            let on_top = y == 0;
+            let on_bottom = y == last_y;
+            let on_left = x == 0;
+            let on_right = x == last_x;
+            let edge = on_top || on_bottom || on_left || on_right;
+            let color = match kind {
+                FallbackKind::Separator => {
+                    // Engrave a single centered groove line.
+                    let mid_v = width > height && y == height / 2;
+                    let mid_h = height >= width && x == width / 2;
+                    if mid_v || mid_h {
+                        colors.primary_dark
+                    } else {
+                        base
+                    }
+                }
+                _ if edge && matches!(kind, FallbackKind::Recessed) => {
+                    // Sunken: dark top/left, light bottom/right.
+                    if on_top || on_left {
+                        dark
+                    } else {
+                        light
+                    }
+                }
+                _ if edge => frame,
+                // First inner row on raised controls: bright highlight.
+                _ if matches!(kind, FallbackKind::Raised) && y == 1 => blend(base, light, 0.6),
+                _ if matches!(kind, FallbackKind::Accent) => accent,
+                _ => base,
             };
             write_pixel(&mut output, x, y, color);
         }
     }
     output
+}
+
+/// Chamfers the four corners so raised/recessed controls read as rounded.
+fn in_clipped_corner(x: u32, y: u32, last_x: u32, last_y: u32, radius: u32) -> bool {
+    if radius == 0 {
+        return false;
+    }
+    let dx = x.min(last_x - x);
+    let dy = y.min(last_y - y);
+    dx + dy < radius
+}
+
+/// Linear blend between two colors; `t` in `0.0..=1.0` moves toward `b`.
+fn blend(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color {
+        red: mix(a.red, b.red),
+        green: mix(a.green, b.green),
+        blue: mix(a.blue, b.blue),
+        alpha: mix(a.alpha, b.alpha),
+    }
 }
 
 fn map_axis(
