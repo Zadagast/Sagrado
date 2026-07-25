@@ -1,0 +1,10 @@
+[package]
+name = "sagrado-theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sagrado appearance engine: theme model and Haxial .hap importer"
+
+[dependencies]
+egui.workspace = true
+thiserror.workspace = true
