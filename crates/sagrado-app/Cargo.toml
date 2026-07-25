@@ -1,0 +1,11 @@
+[package]
+name = "sagrado"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sagrado: p2p communications app with a KDX-style skinnable appearance engine"
+
+[dependencies]
+eframe.workspace = true
+egui.workspace = true
+sagrado-theme = { path = "../sagrado-theme" }
