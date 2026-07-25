@@ -1,7 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/sagrado-theme"]
-# Add sagrado-ui and sagrado-app here as they are introduced.
+members = [
+    "crates/sagrado-theme",
+    "crates/sagrado-ui",
+    "crates/sagrado-app",
+]
 
 [workspace.package]
 version = "0.1.0"

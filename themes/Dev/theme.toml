@@ -1,0 +1,19 @@
+[meta]
+name = "Dev"
+author = "Sagrado"
+version = "0.1"
+description = "Colors-only development theme"
+
+[colors]
+text = "#202020"
+primary_light = "#ffffff"
+primary_background = "#d7d7d7"
+primary_dark = "#8c8c8c"
+primary_frame = "#404040"
+selection = "#3164cf"
+selection_text = "#ffffff"
+text_box_background = "#ffffff"
+menu_background = "#eeeeee"
+menu_text = "#202020"
+alert = "#ffcf66"
+alert_text = "#202020"

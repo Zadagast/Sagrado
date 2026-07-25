@@ -1,0 +1,460 @@
+import { VerticalBox, HorizontalBox, ListView } from "std-widgets.slint";
+
+export global ThemeRuntime {
+    in-out property <int> revision;
+    pure callback render(string, int, int, int, int) -> image;
+    pure callback color(string, int) -> color;
+}
+
+component ThemedSurface inherits Rectangle {
+    in property <string> slot: "box";
+    in property <int> state;
+    background: transparent;
+    Image {
+        preferred-width: 0px;
+        preferred-height: 0px;
+        source: ThemeRuntime.render(root.slot, root.width / 1px, root.height / 1px, root.state, ThemeRuntime.revision);
+        image-fit: fill;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
+component ThemedButton inherits ThemedSurface {
+    in property <string> label;
+    in property <bool> disabled;
+    callback clicked();
+    state: disabled ? 2 : touch.pressed || touch.has-hover ? 1 : 0;
+    Text {
+        text: root.label;
+        color: ThemeRuntime.color("text", ThemeRuntime.revision);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 4px;
+        width: parent.width - 8px;
+        y: 2px;
+        height: parent.height - 4px;
+    }
+    touch := TouchArea {
+        enabled: !root.disabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component DefaultButton inherits ThemedButton {
+    slot: "default_button";
+}
+
+component TickButton inherits ThemedSurface {
+    in property <string> label;
+    in-out property <bool> checked;
+    in property <bool> disabled;
+    callback toggled(bool);
+    slot: checked ? "tick_ticked" : "tick_blank";
+    state: disabled ? 2 : touch.pressed || touch.has-hover ? 1 : 0;
+    Text {
+        text: (checked ? "☑ " : "☐ ") + root.label;
+        color: ThemeRuntime.color("text", ThemeRuntime.revision);
+        vertical-alignment: center;
+        x: 6px;
+        width: parent.width - 12px;
+        height: parent.height;
+    }
+    touch := TouchArea {
+        enabled: !root.disabled;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+component MutexButton inherits ThemedSurface {
+    in property <string> label;
+    in-out property <bool> checked;
+    in property <bool> disabled;
+    callback toggled(bool);
+    slot: checked ? "mutex_ticked" : "mutex_blank";
+    state: disabled ? 2 : touch.pressed || touch.has-hover ? 1 : 0;
+    Text {
+        text: (checked ? "◉ " : "○ ") + root.label;
+        color: ThemeRuntime.color("text", ThemeRuntime.revision);
+        vertical-alignment: center;
+        x: 6px;
+        width: parent.width - 12px;
+        height: parent.height;
+    }
+    touch := TouchArea {
+        enabled: !root.disabled;
+        clicked => {
+            root.checked = true;
+            root.toggled(true);
+        }
+    }
+}
+
+component PopupButton inherits ThemedButton {
+    slot: "popup_button";
+    callback opened();
+    clicked => { root.opened(); }
+}
+
+component ThemedTextBox inherits ThemedSurface {
+    in property <string> text;
+    in property <bool> disabled;
+    in property <bool> focused;
+    callback edited(string);
+    slot: "text_box";
+    state: disabled ? 2 : focused ? 3 : 0;
+    focused: input.has-focus;
+    input := TextInput {
+        text: root.text;
+        color: ThemeRuntime.color("text", ThemeRuntime.revision);
+        x: 5px;
+        width: parent.width - 10px;
+        y: 2px;
+        height: parent.height - 4px;
+        enabled: !root.disabled;
+        edited => { root.edited(self.text); }
+    }
+}
+
+component ColumnHeader inherits ThemedButton {
+    slot: "column_header";
+}
+
+component ThemedList inherits Rectangle {
+    in property <[string]> columns;
+    in property <[string]> rows;
+    callback row-clicked(int);
+    background: transparent;
+    Image {
+        preferred-width: 0px;
+        preferred-height: 0px;
+        source: ThemeRuntime.render("box", root.width / 1px, root.height / 1px, 0, ThemeRuntime.revision);
+        image-fit: fill;
+        width: parent.width;
+        height: parent.height;
+    }
+    VerticalBox {
+        spacing: 1px;
+        HorizontalBox {
+            height: 26px;
+            for column in root.columns : ColumnHeader {
+                label: column;
+                clicked => { }
+            }
+        }
+        ListView {
+            for row[index] in root.rows : ThemedButton {
+                label: row;
+                clicked => { root.row-clicked(index); }
+                height: 26px;
+            }
+        }
+    }
+}
+
+component HorizontalSlider inherits ThemedSurface {
+    in-out property <float> value;
+    in property <bool> disabled;
+    callback changed(float);
+    slot: "h_slider_bar";
+    state: disabled ? 2 : touch.pressed || touch.has-hover ? 1 : 0;
+    ThemedSurface {
+        slot: "h_slider_indicator";
+        width: 14px;
+        height: parent.height;
+        x: (parent.width - self.width) * root.value;
+        state: root.disabled ? 2 : 0;
+    }
+    touch := TouchArea {
+        enabled: !root.disabled;
+        clicked => {
+            root.value = clamp(0.0, touch.mouse-x / root.width, 1.0);
+            root.changed(root.value);
+        }
+    }
+}
+
+component ProgressBar inherits ThemedSurface {
+    in property <float> value;
+    slot: "progress_bar";
+    ThemedSurface {
+        slot: "progress_fill";
+        width: parent.width * clamp(0.0, root.value, 1.0);
+        height: parent.height;
+    }
+}
+
+component HorizontalScrollBar inherits ThemedSurface {
+    in-out property <float> value;
+    in property <bool> disabled;
+    callback changed(float);
+    slot: "h_scrollbar_track";
+    ThemedSurface {
+        slot: "h_scrollbar_thumb";
+        x: 18px + (parent.width - 36px - self.width) * root.value;
+        y: 0px;
+        width: 32px;
+        height: parent.height;
+    }
+    Rectangle {
+        width: 18px;
+        height: parent.height;
+        background: transparent;
+        Text {
+            text: "‹";
+            color: ThemeRuntime.color("text", ThemeRuntime.revision);
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+        TouchArea {
+            enabled: !root.disabled;
+            clicked => {
+                root.value = clamp(0.0, root.value - 0.1, 1.0);
+                root.changed(root.value);
+            }
+        }
+    }
+    Rectangle {
+        x: parent.width - 18px;
+        width: 18px;
+        height: parent.height;
+        background: transparent;
+        Text {
+            text: "›";
+            color: ThemeRuntime.color("text", ThemeRuntime.revision);
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+        TouchArea {
+            enabled: !root.disabled;
+            clicked => {
+                root.value = clamp(0.0, root.value + 0.1, 1.0);
+                root.changed(root.value);
+            }
+        }
+    }
+    TouchArea {
+        enabled: !root.disabled;
+        clicked => {
+            root.value = clamp(0.0, (self.mouse-x - 18px) / (root.width - 36px), 1.0);
+            root.changed(root.value);
+        }
+        moved => {
+            if (self.pressed) {
+                root.value = clamp(0.0, (self.mouse-x - 18px) / (root.width - 36px), 1.0);
+                root.changed(root.value);
+            }
+        }
+    }
+}
+
+component VerticalScrollBar inherits ThemedSurface {
+    in-out property <float> value;
+    in property <bool> disabled;
+    callback changed(float);
+    slot: "v_scrollbar_track";
+    ThemedSurface {
+        slot: "v_scrollbar_thumb";
+        x: 0px;
+        y: 18px + (parent.height - 36px - self.height) * root.value;
+        width: parent.width;
+        height: 32px;
+    }
+    Rectangle {
+        width: parent.width;
+        height: 18px;
+        background: transparent;
+        Text {
+            text: "⌃";
+            color: ThemeRuntime.color("text", ThemeRuntime.revision);
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+        TouchArea {
+            enabled: !root.disabled;
+            clicked => {
+                root.value = clamp(0.0, root.value - 0.1, 1.0);
+                root.changed(root.value);
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 18px;
+        width: parent.width;
+        height: 18px;
+        background: transparent;
+        Text {
+            text: "⌄";
+            color: ThemeRuntime.color("text", ThemeRuntime.revision);
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+        TouchArea {
+            enabled: !root.disabled;
+            clicked => {
+                root.value = clamp(0.0, root.value + 0.1, 1.0);
+                root.changed(root.value);
+            }
+        }
+    }
+    TouchArea {
+        enabled: !root.disabled;
+        clicked => {
+            root.value = clamp(0.0, (self.mouse-y - 18px) / (root.height - 36px), 1.0);
+            root.changed(root.value);
+        }
+        moved => {
+            if (self.pressed) {
+                root.value = clamp(0.0, (self.mouse-y - 18px) / (root.height - 36px), 1.0);
+                root.changed(root.value);
+            }
+        }
+    }
+}
+
+component HorizontalSeparator inherits Rectangle {
+    height: 2px;
+    Image {
+        preferred-width: 0px;
+        preferred-height: 0px;
+        source: ThemeRuntime.render("horiz_separator", root.width / 1px, root.height / 1px, 0, ThemeRuntime.revision);
+        image-fit: fill;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
+component VerticalSeparator inherits Rectangle {
+    width: 2px;
+    Image {
+        preferred-width: 0px;
+        preferred-height: 0px;
+        source: ThemeRuntime.render("vert_separator", root.width / 1px, root.height / 1px, 0, ThemeRuntime.revision);
+        image-fit: fill;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
+component GroupBox inherits ThemedSurface {
+    in property <string> title;
+    slot: "box";
+    Text {
+        text: root.title;
+        color: ThemeRuntime.color("text", ThemeRuntime.revision);
+        x: 12px;
+        y: 0px;
+    }
+}
+
+component ThemePicker inherits Rectangle {
+    in property <[string]> options;
+    in-out property <string> selected;
+    callback changed(string);
+    height: 30px;
+    ThemedButton {
+        label: root.selected;
+        width: parent.width;
+        height: parent.height;
+        clicked => { popup.visible = !popup.visible; }
+    }
+    popup := Rectangle {
+        visible: false;
+        y: parent.height;
+        width: parent.width;
+        height: root.options.length * 28px;
+        Image {
+            preferred-width: 0px;
+            preferred-height: 0px;
+            source: ThemeRuntime.render("menu_background", self.width / 1px, self.height / 1px, 0, ThemeRuntime.revision);
+            image-fit: fill;
+            width: parent.width;
+            height: parent.height;
+        }
+        for option in root.options : ThemedButton {
+            label: option;
+            width: parent.width;
+            height: 28px;
+            clicked => {
+                root.selected = option;
+                root.changed(option);
+                popup.visible = false;
+            }
+        }
+    }
+}
+
+export component PreviewGallery inherits Window {
+    title: "Preview GUI Items";
+    width: 900px;
+    height: 700px;
+    in property <[string]> theme-options;
+    in-out property <string> selected-theme;
+    callback theme-changed(string);
+    Image {
+        preferred-width: 0px;
+        preferred-height: 0px;
+        source: ThemeRuntime.render("window_frame", self.width / 1px, self.height / 1px, 0, ThemeRuntime.revision);
+        image-fit: fill;
+        width: parent.width;
+        height: parent.height;
+    }
+    VerticalBox {
+        padding: 16px;
+        spacing: 10px;
+        HorizontalBox {
+            height: 34px;
+            Text { text: "Preview GUI Items"; color: ThemeRuntime.color("text", ThemeRuntime.revision); vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            ThemePicker {
+                options: root.theme-options;
+                selected: root.selected-theme;
+                width: 180px;
+                changed => { root.theme-changed(self.selected); }
+            }
+        }
+        HorizontalBox {
+            spacing: 10px;
+            ThemedButton { label: "Push Button"; width: 140px; height: 34px; }
+            DefaultButton { label: "Default Button"; width: 150px; height: 34px; }
+            PopupButton { label: "Popup Button ▾"; width: 150px; height: 34px; }
+        }
+        HorizontalBox {
+            spacing: 10px;
+            TickButton { label: "Tick option"; width: 160px; height: 32px; }
+            MutexButton { label: "Mutex option"; width: 160px; height: 32px; }
+            ThemedTextBox { text: "Editable text"; width: 220px; height: 32px; }
+        }
+        HorizontalBox {
+            spacing: 10px;
+            VerticalBox {
+                width: 500px;
+                spacing: 8px;
+                GroupBox { title: "Progress"; height: 80px; }
+                ProgressBar { value: 0.68; height: 24px; }
+                HorizontalSlider { value: 0.35; height: 24px; }
+                HorizontalScrollBar { value: 0.5; height: 24px; }
+            }
+            VerticalScrollBar { value: 0.4; width: 28px; }
+        }
+        ThemedList {
+            columns: ["Name", "Status", "Size"];
+            rows: ["README.md", "theme.toml", "button.png"];
+            vertical-stretch: 1;
+        }
+        HorizontalSeparator {}
+        VerticalSeparator { height: 12px; }
+        Text { text: "Owner-drawn fallback rendering • TODO: menus, icons, resize chrome, and long-tail Haxial slots"; color: ThemeRuntime.color("text", ThemeRuntime.revision); }
+    }
+}

@@ -1,0 +1,19 @@
+[meta]
+name = "Amber"
+author = "Sagrado"
+version = "0.1"
+description = "Colors-only warm development theme"
+
+[colors]
+text = "#2b1600"
+primary_light = "#fff5d6"
+primary_background = "#e7b96b"
+primary_dark = "#9c5e1a"
+primary_frame = "#61350c"
+selection = "#b94e00"
+selection_text = "#fff5d6"
+text_box_background = "#fff8e8"
+menu_background = "#f5d99f"
+menu_text = "#2b1600"
+alert = "#ff8a47"
+alert_text = "#2b1600"

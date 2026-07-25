@@ -7,6 +7,8 @@
 //! discovers `button-hilited.png`. Missing state images are valid, while a
 //! referenced normal image must exist.
 
+pub mod render;
+
 use std::{
     collections::HashMap,
     fmt, fs,
