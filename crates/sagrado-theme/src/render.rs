@@ -74,10 +74,14 @@ pub fn nine_slice(
 enum FallbackKind {
     /// A raised control: vertical gradient, dark border, light top highlight.
     Raised,
+    /// A raised control with an accent default ring.
+    DefaultRaised,
     /// A sunken well: near-white fill with an inset (dark top/left) border.
     Recessed,
     /// A saturated progress/selection fill.
     Accent,
+    /// A check/radio control with a check or dot mark.
+    Ticked,
     /// A flat panel with a single-pixel border.
     Panel,
     /// A thin engraved separator line, centered in its box.
@@ -89,7 +93,6 @@ impl FallbackKind {
         use SlotId::*;
         match slot {
             Button
-            | DefaultButton
             | IconButton
             | PopupButton
             | PopupButtonNoTitle
@@ -107,11 +110,13 @@ impl FallbackKind {
             | WindowResize
             | MenuBarTitle
             | PlusMinus => Self::Raised,
+            DefaultButton => Self::DefaultRaised,
             TextBox | FocusBox | ProgressBar | HSliderBar | VSliderBar | HScrollBarTrack
             | VScrollBarTrack | TickBlank | MutexBlank | TickTristated | MutexTristated => {
                 Self::Recessed
             }
-            ProgressFill | TickTicked | MutexTicked => Self::Accent,
+            ProgressFill => Self::Accent,
+            TickTicked | MutexTicked => Self::Ticked,
             HorizSeparator | VertSeparator | MenuSeparator => Self::Separator,
             _ => Self::Panel,
         }
@@ -119,8 +124,8 @@ impl FallbackKind {
 
     fn corner_radius(self) -> u32 {
         match self {
-            Self::Raised => 2,
-            Self::Recessed | Self::Accent => 1,
+            Self::Raised | Self::DefaultRaised => 2,
+            Self::Recessed | Self::Accent | Self::Ticked => 1,
             _ => 0,
         }
     }
@@ -149,11 +154,11 @@ pub fn fallback_widget(
     let radius = kind.corner_radius().min(width / 2).min(height / 2);
 
     let (mut top, mut bottom) = match kind {
-        FallbackKind::Raised => (
+        FallbackKind::Raised | FallbackKind::DefaultRaised => (
             blend(colors.primary_background, colors.primary_light, 0.75),
             blend(colors.primary_background, colors.primary_dark, 0.35),
         ),
-        FallbackKind::Recessed => (
+        FallbackKind::Recessed | FallbackKind::Ticked => (
             colors.text_box_background,
             blend(colors.text_box_background, colors.primary_background, 0.5),
         ),
@@ -201,6 +206,9 @@ pub fn fallback_widget(
             accent = blend(accent, colors.selection, 0.2);
         }
     }
+    if matches!(kind, FallbackKind::DefaultRaised) {
+        frame = accent;
+    }
 
     let last_x = width - 1;
     let last_y = height - 1;
@@ -241,7 +249,16 @@ pub fn fallback_widget(
                 }
                 _ if edge => frame,
                 // First inner row on raised controls: bright highlight.
-                _ if matches!(kind, FallbackKind::Raised) && y == 1 => blend(base, light, 0.6),
+                _ if matches!(kind, FallbackKind::Raised | FallbackKind::DefaultRaised)
+                    && y == 1 =>
+                {
+                    blend(base, light, 0.6)
+                }
+                _ if matches!(kind, FallbackKind::Ticked)
+                    && checkmark_pixel(x, y, width, height) =>
+                {
+                    accent
+                }
                 _ if matches!(kind, FallbackKind::Accent) => accent,
                 _ => base,
             };
@@ -249,6 +266,33 @@ pub fn fallback_widget(
         }
     }
     output
+}
+
+fn checkmark_pixel(x: u32, y: u32, width: u32, height: u32) -> bool {
+    if width < 8 || height < 8 {
+        return false;
+    }
+    let sx = width as i32 / 4;
+    let sy = height as i32 / 2;
+    let ex = width as i32 * 3 / 4;
+    let ey = height as i32 / 3;
+    let x = x as i32;
+    let y = y as i32;
+    line_pixel(x, y, sx, sy, width as i32 / 2, height as i32 * 3 / 4)
+        || line_pixel(x, y, width as i32 / 2, height as i32 * 3 / 4, ex, ey)
+}
+
+fn line_pixel(x: i32, y: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> bool {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let length = (dx * dx + dy * dy) as f32;
+    if length == 0.0 {
+        return x == x0 && y == y0;
+    }
+    let t = (((x - x0) * dx + (y - y0) * dy) as f32 / length).clamp(0.0, 1.0);
+    let px = x0 as f32 + t * dx as f32;
+    let py = y0 as f32 + t * dy as f32;
+    (x as f32 - px).abs() <= 1.5 && (y as f32 - py).abs() <= 1.5
 }
 
 /// Chamfers the four corners so raised/recessed controls read as rounded.

@@ -1,16 +1,16 @@
 [meta]
-name = "Platinum"
+name = "Aluminum"
 author = "Sagrado"
 version = "1.0"
-description = "Classic Platinum-inspired cool gray skin with Aqua accents"
+description = "Aluminum Alloy-inspired brushed metal skin with green Aqua gel accents"
 
 [colors]
 text = "#111111"
 primary_light = "#ffffff"
-primary_background = "#d0d0d0"
-primary_dark = "#747474"
-primary_frame = "#707070"
-selection = "#3b78c5"
+primary_background = "#d4d4d4"
+primary_dark = "#777777"
+primary_frame = "#686868"
+selection = "#4fae59"
 selection_text = "#ffffff"
 text_box_background = "#ffffff"
 menu_background = "#eeeeee"

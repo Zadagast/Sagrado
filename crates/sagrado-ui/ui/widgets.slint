@@ -142,42 +142,54 @@ component ColumnHeader inherits ThemedButton {
 component ThemedList inherits Rectangle {
     in property <[string]> columns;
     in property <[string]> rows;
+    in property <[string]> secondary;
+    property <length> header-height: 18px;
     callback row-clicked(int);
     background: transparent;
-    Image {
-        preferred-width: 0px;
-        preferred-height: 0px;
-        source: ThemeRuntime.render("box", root.width / 1px, root.height / 1px, 0, ThemeRuntime.revision);
-        image-fit: fill;
+    clip: true;
+    HorizontalBox {
+        x: 0px;
+        y: 0px;
+        padding: 0px;
+        spacing: 0px;
         width: parent.width;
-        height: parent.height;
-    }
-    VerticalBox {
-        spacing: 1px;
-        HorizontalBox {
-            height: 20px;
-            for column in root.columns : ColumnHeader {
-                label: column;
-                clicked => { }
-            }
+        height: root.header-height;
+        for column in root.columns : ColumnHeader {
+            label: column;
+            width: parent.width / root.columns.length;
+            height: parent.height;
+            clicked => { }
         }
-        ListView {
-            for row[index] in root.rows : Rectangle {
-                height: 20px;
-                background: Math.mod(index, 2) == 0
-                    ? ThemeRuntime.color("text-box-background", ThemeRuntime.revision)
-                    : ThemeRuntime.color("primary-background", ThemeRuntime.revision);
-                Text {
-                    text: row;
-                    color: ThemeRuntime.color("text", ThemeRuntime.revision);
-                    x: 6px;
-                    vertical-alignment: center;
-                    width: parent.width - 12px;
-                    height: parent.height;
-                }
-                TouchArea {
-                    clicked => { root.row-clicked(index); }
-                }
+    }
+    ListView {
+        x: 0px;
+        y: root.header-height;
+        width: parent.width;
+        height: parent.height - root.header-height;
+        for row[index] in root.rows : Rectangle {
+            width: parent.width;
+            height: 18px;
+            background: Math.mod(index, 2) == 0
+                ? ThemeRuntime.color("text-box-background", ThemeRuntime.revision)
+                : ThemeRuntime.color("primary-background", ThemeRuntime.revision);
+            Text {
+                text: row;
+                color: ThemeRuntime.color("text", ThemeRuntime.revision);
+                x: 6px;
+                vertical-alignment: center;
+                width: parent.width / 2 - 6px;
+                height: parent.height;
+            }
+            Text {
+                text: root.secondary[index];
+                color: ThemeRuntime.color("text", ThemeRuntime.revision);
+                x: parent.width / 2 + 6px;
+                vertical-alignment: center;
+                width: parent.width / 2 - 6px;
+                height: parent.height;
+            }
+            TouchArea {
+                clicked => { root.row-clicked(index); }
             }
         }
     }
@@ -215,11 +227,17 @@ component ProgressBar inherits ThemedSurface {
     }
 }
 
-component HorizontalScrollBar inherits ThemedSurface {
+component HorizontalScrollBar inherits Rectangle {
     in-out property <float> value;
     in property <bool> disabled;
     callback changed(float);
-    slot: "h_scrollbar_track";
+    background: transparent;
+    ThemedSurface {
+        slot: "h_scrollbar_track";
+        x: 18px;
+        width: parent.width - 36px;
+        height: parent.height;
+    }
     ThemedSurface {
         slot: "h_scrollbar_thumb";
         x: 18px + (parent.width - 36px - self.width) * root.value;
@@ -283,11 +301,17 @@ component HorizontalScrollBar inherits ThemedSurface {
     }
 }
 
-component VerticalScrollBar inherits ThemedSurface {
+component VerticalScrollBar inherits Rectangle {
     in-out property <float> value;
     in property <bool> disabled;
     callback changed(float);
-    slot: "v_scrollbar_track";
+    background: transparent;
+    ThemedSurface {
+        slot: "v_scrollbar_track";
+        y: 18px;
+        width: parent.width;
+        height: parent.height - 36px;
+    }
     ThemedSurface {
         slot: "v_scrollbar_thumb";
         x: 0px;
@@ -351,6 +375,49 @@ component VerticalScrollBar inherits ThemedSurface {
     }
 }
 
+component KdxList inherits Rectangle {
+    in property <[string]> columns;
+    in property <[string]> rows;
+    in property <[string]> secondary;
+    // Sunken frame border to inset content inside; scrollbar strip width.
+    property <length> border: 3px;
+    property <length> strip: 16px;
+    callback row-clicked(int);
+    background: transparent;
+    Image {
+        preferred-width: 0px;
+        preferred-height: 0px;
+        source: ThemeRuntime.render("box", root.width / 1px, root.height / 1px, 0, ThemeRuntime.revision);
+        image-fit: fill;
+        width: parent.width;
+        height: parent.height;
+    }
+    ThemedList {
+        columns: root.columns;
+        rows: root.rows;
+        secondary: root.secondary;
+        x: root.border;
+        y: root.border;
+        width: parent.width - 2 * root.border - root.strip;
+        height: parent.height - 2 * root.border - root.strip;
+        row-clicked(index) => { root.row-clicked(index); }
+    }
+    VerticalScrollBar {
+        x: parent.width - root.border - root.strip;
+        y: root.border;
+        width: root.strip;
+        height: parent.height - 2 * root.border - root.strip;
+        value: 0.0;
+    }
+    HorizontalScrollBar {
+        x: root.border;
+        y: parent.height - root.border - root.strip;
+        width: parent.width - 2 * root.border - root.strip;
+        height: root.strip;
+        value: 0.0;
+    }
+}
+
 component HorizontalSeparator inherits Rectangle {
     height: 2px;
     Image {
@@ -396,17 +463,18 @@ component GroupBox inherits ThemedSurface {
 component ThemePicker inherits Rectangle {
     in property <[string]> options;
     in-out property <string> selected;
+    in property <string> caption;
     callback changed(string);
     height: 24px;
     ThemedButton {
-        label: root.selected;
+        label: root.caption == "" ? root.selected : root.caption;
         width: parent.width;
         height: parent.height;
         clicked => { popup.visible = !popup.visible; }
     }
     popup := Rectangle {
         visible: false;
-        y: parent.height;
+        y: 50px;
         width: parent.width;
         height: root.options.length * 24px;
         Image {
@@ -433,8 +501,8 @@ component ThemePicker inherits Rectangle {
 
 export component PreviewGallery inherits Window {
     title: "Preview GUI Items";
-    width: 820px;
-    height: 590px;
+    width: 375px;
+    height: 330px;
     in property <[string]> theme-options;
     in-out property <string> selected-theme;
     callback theme-changed(string);
@@ -446,51 +514,124 @@ export component PreviewGallery inherits Window {
         width: parent.width;
         height: parent.height;
     }
-    VerticalBox {
-        padding: 10px;
-        spacing: 6px;
-        HorizontalBox {
-            height: 26px;
-            Text { text: "Preview GUI Items"; color: ThemeRuntime.color("text", ThemeRuntime.revision); vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; }
-            ThemePicker {
-                options: root.theme-options;
-                selected: root.selected-theme;
-                width: 180px;
-                changed => { root.theme-changed(self.selected); }
-            }
-        }
-        HorizontalBox {
-            spacing: 6px;
-            ThemedButton { label: "Push Button"; width: 128px; height: 22px; }
-            DefaultButton { label: "Default Button"; width: 138px; height: 22px; }
-            PopupButton { label: "Popup Button ▾"; width: 138px; height: 22px; }
-        }
-        HorizontalBox {
-            spacing: 6px;
-            TickButton { label: "Tick option"; width: 142px; height: 22px; }
-            MutexButton { label: "Mutex option"; width: 142px; height: 22px; }
-            ThemedTextBox { text: "Editable text"; width: 210px; height: 22px; }
-        }
-        HorizontalBox {
-            spacing: 6px;
-            VerticalBox {
-                width: 500px;
-                spacing: 5px;
-                GroupBox { title: "Progress"; content: "68% complete"; height: 52px; }
-                ProgressBar { value: 0.68; height: 14px; }
-                HorizontalSlider { value: 0.35; height: 18px; }
-                HorizontalScrollBar { value: 0.5; height: 18px; }
-            }
-            VerticalScrollBar { value: 0.4; width: 18px; }
-        }
-        ThemedList {
-            columns: ["Name", "Status", "Size"];
-            rows: ["README.md", "theme.toml", "button.png"];
-            vertical-stretch: 1;
-        }
-        HorizontalSeparator {}
-        VerticalSeparator { height: 12px; }
-        Text { text: "Owner-drawn fallback rendering • TODO: menus, icons, resize chrome, and long-tail Haxial slots"; color: ThemeRuntime.color("text", ThemeRuntime.revision); }
+    ThemePicker {
+        x: 8px;
+        y: 8px;
+        options: root.theme-options;
+        selected: root.selected-theme;
+        caption: "Miscellaneous";
+        width: 178px;
+        changed => { root.theme-changed(self.selected); }
     }
+    Text {
+        text: "Primary Label";
+        font-weight: 700;
+        color: ThemeRuntime.color("text", ThemeRuntime.revision);
+        x: 8px;
+        y: 38px;
+        width: 100px;
+        height: 20px;
+        vertical-alignment: center;
+    }
+    ThemedTextBox {
+        text: "text box";
+        x: 110px;
+        y: 36px;
+        width: 128px;
+        height: 22px;
+    }
+    KdxList {
+        x: 8px;
+        y: 66px;
+        width: 226px;
+        height: 132px;
+        columns: ["Column 1", "Column 2"];
+        rows: ["an item", "an item", "an item"];
+        secondary: ["123K", "123K", "123K"];
+    }
+    ThemedButton {
+        label: "Button";
+        x: 246px;
+        y: 66px;
+        width: 112px;
+        height: 22px;
+    }
+    ThemedButton {
+        label: "Disabled";
+        disabled: true;
+        x: 246px;
+        y: 92px;
+        width: 112px;
+        height: 22px;
+    }
+    DefaultButton {
+        label: "Default";
+        x: 246px;
+        y: 122px;
+        width: 112px;
+        height: 22px;
+    }
+    PopupButton {
+        label: "";
+        x: 246px;
+        y: 148px;
+        width: 112px;
+        height: 22px;
+    }
+    TickButton {
+        label: "Tick Button";
+        checked: true;
+        x: 246px;
+        y: 176px;
+        width: 112px;
+        height: 22px;
+    }
+    TickButton {
+        label: "Tick Disable";
+        checked: true;
+        disabled: true;
+        x: 246px;
+        y: 200px;
+        width: 112px;
+        height: 22px;
+    }
+    ProgressBar {
+        value: 0.62;
+        x: 8px;
+        y: 208px;
+        width: 226px;
+        height: 14px;
+    }
+    HorizontalSlider {
+        value: 0.35;
+        x: 8px;
+        y: 232px;
+        width: 226px;
+        height: 18px;
+    }
+    HorizontalSlider {
+        value: 0.68;
+        x: 8px;
+        y: 256px;
+        width: 226px;
+        height: 18px;
+    }
+    ThemedButton {
+        label: "◉";
+        x: 8px;
+        y: 286px;
+        width: 26px;
+        height: 24px;
+    }
+    ThemedButton {
+        label: "■";
+        x: 40px;
+        y: 286px;
+        width: 26px;
+        height: 24px;
+    }
+    MutexButton { visible: false; label: "Mutex"; }
+    HorizontalSeparator { visible: false; }
+    VerticalSeparator { visible: false; }
+    GroupBox { visible: false; title: "Group"; content: ""; }
 }
