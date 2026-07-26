@@ -163,8 +163,13 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     if (frame) {
         cv.nine_slice(*frame, win);
         int tw = cv.text_width(title);
-        cv.text((win.w - tw) / 2, (lay.title_h - kFontHeight) / 2, title,
-                focused ? kWhite : kGlyphGrey);
+        // Title text: the theme's Label / Disabled Label color entries.
+        Color tc = focused ? kWhite : kGlyphGrey;
+        if (theme->has_colors) {
+            uint32_t v = theme->color(focused ? 5 : 7);
+            tc = {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
+        }
+        cv.text((win.w - tw) / 2, (lay.title_h - kFontHeight) / 2, title, tc);
         auto paint_btn = [&](Rect r, int normal, int focus, int hilited,
                              bool pressed) {
             if (r.w == 0) return;

@@ -36,6 +36,7 @@ struct App {
     int hot_item = -1;
     Rect dropdown{};
     int item_h = 18;
+    int dd_rows = 1, dd_colw = 1; // dropdown column layout
     int drag_mode = 0; // 0 none, 3 thumb drag, 4 title boxes
     int thumb_grab = 0;
     // Scrolling.
@@ -295,7 +296,17 @@ const char *menu_item_text(int m, int i) {
     return kMenuItems[m][i];
 }
 
+// Dropdown item index at a point, honoring the column layout.
+int dropdown_index(int x, int y) {
+    if (!g_app.dropdown.contains(x, y)) return -1;
+    int col = (x - g_app.dropdown.x - 2) / g_app.dd_colw;
+    int row = (y - g_app.dropdown.y - 2) / g_app.item_h;
+    if (row < 0 || row >= g_app.dd_rows) return -1;
+    return col * g_app.dd_rows + row;
+}
+
 // The open pull-down menu: dark raised panel, red hilite bar, painted last.
+// Long menus (Appearance with many .haps) wrap into multiple columns.
 void paint_dropdown(Canvas &cv) {
     int m = g_app.open_menu;
     if (m < 0) return;
@@ -305,8 +316,19 @@ void paint_dropdown(Canvas &cv) {
         int tw = cv.text_width(menu_item_text(m, i));
         if (tw > wmax) wmax = tw;
     }
-    Rect r{g_app.menu_rects[m].x, g_app.menu_rects[m].bottom() + 2, wmax + 24,
-           n * g_app.item_h + 4};
+    int top = g_app.menu_rects[m].bottom() + 2;
+    int max_rows = (cv.height() - top - 8) / g_app.item_h;
+    if (max_rows < 1) max_rows = 1;
+    int rows = n < max_rows ? n : max_rows;
+    int cols = (n + rows - 1) / rows;
+    int colw = wmax + 24;
+    g_app.dd_rows = rows;
+    g_app.dd_colw = colw;
+    int rx = g_app.menu_rects[m].x;
+    if (rx + cols * colw + 4 > cv.width())
+        rx = cv.width() - cols * colw - 4;
+    if (rx < 0) rx = 0;
+    Rect r{rx, top, cols * colw + 4, rows * g_app.item_h + 4};
     g_app.dropdown = r;
     UiColors uc = ui_colors(active_theme());
     cv.fill(r, uc.bar_body);
@@ -316,7 +338,9 @@ void paint_dropdown(Canvas &cv) {
     cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, uc.bar_dark);
     cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, uc.bar_dark);
     for (int i = 0; i < n; ++i) {
-        Rect item{r.x + 2, r.y + 2 + i * g_app.item_h, r.w - 4, g_app.item_h};
+        int col = i / rows, row = i % rows;
+        Rect item{r.x + 2 + col * colw, r.y + 2 + row * g_app.item_h,
+                  colw, g_app.item_h};
         bool hot = i == g_app.hot_item;
         if (hot) cv.fill(item, uc.hilite);
         Color fg = hot ? uc.hilite_text : uc.text;
@@ -385,7 +409,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
             if (g_app.open_menu >= 0) {
                 if (g_app.dropdown.contains(x, y)) {
-                    int i = (y - g_app.dropdown.y - 2) / g_app.item_h;
+                    int i = dropdown_index(x, y);
                     int m = g_app.open_menu;
                     g_app.open_menu = -1;
                     if (i >= 0 && i < menu_item_count(m)) {
@@ -458,9 +482,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (g_app.open_menu >= 0) {
-                int hot = g_app.dropdown.contains(x, y)
-                              ? (y - g_app.dropdown.y - 2) / g_app.item_h
-                              : -1;
+                int hot = dropdown_index(x, y);
                 if (hot != g_app.hot_item) {
                     g_app.hot_item = hot;
                     InvalidateRect(hwnd, nullptr, FALSE);
