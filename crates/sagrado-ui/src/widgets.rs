@@ -497,9 +497,39 @@ fn scrollbar_in(
             } else {
                 c.primary_dark
             };
-            let tri = |center: egui::Pos2, dir: Vec2| {
+            let hi = table(43, c.primary_light);
+            let sh = track;
+            // Each arrow sits in its own raised grey box, KDX Standard style.
+            let arrow_box = |span0: f32, span1: f32| {
+                if horizontal {
+                    Rect::from_min_max(
+                        egui::pos2(rect.left() + span0, rect.top()),
+                        egui::pos2(rect.left() + span1, rect.bottom()),
+                    )
+                } else {
+                    Rect::from_min_max(
+                        egui::pos2(rect.left(), rect.top() + span0),
+                        egui::pos2(rect.right(), rect.top() + span1),
+                    )
+                }
+            };
+            let boxed_tri = |r: Rect, dir: Vec2| {
+                let p = ui.painter();
+                p.rect(
+                    r,
+                    0.0,
+                    c.primary_background,
+                    (1.0, Color32::BLACK),
+                    StrokeKind::Inside,
+                );
+                let inner = r.shrink(1.0);
+                p.line_segment([inner.left_top(), inner.right_top()], (1.0, hi));
+                p.line_segment([inner.left_top(), inner.left_bottom()], (1.0, hi));
+                p.line_segment([inner.left_bottom(), inner.right_bottom()], (1.0, sh));
+                p.line_segment([inner.right_top(), inner.right_bottom()], (1.0, sh));
+                let center = r.center();
                 let side = Vec2::new(-dir.y, dir.x);
-                ui.painter().add(egui::Shape::convex_polygon(
+                p.add(egui::Shape::convex_polygon(
                     vec![
                         center + dir * 3.5,
                         center - dir * 2.5 + side * 4.0,
@@ -515,22 +545,15 @@ fn scrollbar_in(
             } else {
                 (Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0))
             };
-            let at = |d: f32| {
-                if horizontal {
-                    egui::pos2(rect.left() + d, rect.center().y)
-                } else {
-                    egui::pos2(rect.center().x, rect.top() + d)
-                }
-            };
             let len = if horizontal {
                 rect.width()
             } else {
                 rect.height()
             };
-            tri(at(arrow_a * 0.25), dec_dir);
-            tri(at(arrow_a * 0.75), inc_dir);
-            tri(at(len - arrow_b * 0.75), dec_dir);
-            tri(at(len - arrow_b * 0.25), inc_dir);
+            boxed_tri(arrow_box(0.0, arrow_a * 0.5), dec_dir);
+            boxed_tri(arrow_box(arrow_a * 0.5, arrow_a), inc_dir);
+            boxed_tri(arrow_box(len - arrow_b, len - arrow_b * 0.5), dec_dir);
+            boxed_tri(arrow_box(len - arrow_b * 0.5, len), inc_dir);
         }
     }
 

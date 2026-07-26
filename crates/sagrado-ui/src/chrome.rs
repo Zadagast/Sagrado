@@ -21,7 +21,7 @@ use crate::paint::{natural, nine_slice, SkinTextures};
 const STD_TITLE_H: f32 = 22.0;
 const STD_BORDER: f32 = 6.0;
 const STD_BTN: Vec2 = Vec2::new(19.0, 15.0);
-const STD_GRIP: f32 = 17.0;
+const STD_GRIP: f32 = 20.0;
 
 /// The chrome buttons a window can have.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -246,11 +246,8 @@ fn layout(theme: &Theme, rect: Rect, focused: bool) -> ChromeLayout {
             Rect::from_min_size(pos, Vec2::new(w as f32, h as f32))
         }
         None => Rect::from_min_max(
-            egui::pos2(
-                rect.right() - 1.0 - STD_GRIP,
-                rect.bottom() - 1.0 - STD_GRIP,
-            ),
-            egui::pos2(rect.right() - 1.0, rect.bottom() - 1.0),
+            egui::pos2(rect.right() - STD_GRIP, rect.bottom() - STD_GRIP),
+            rect.max,
         ),
     };
 
@@ -330,7 +327,9 @@ pub fn window_frame(
 
             add_contents(&mut content_ui(ui, lay.client));
 
-            // Grow box last so it wins the shared corner over the content.
+            // Grow box last so it wins the shared corner over the content
+            // and is never painted over.
+            paint_grip(ui, theme, skin, &lay, &colors, focused);
             resize_grip(ui, ctx, lay.grip);
         });
 }
@@ -397,7 +396,11 @@ fn paint_frame(
 
         // Side and bottom borders: a raised red ridge — black outline,
         // bright/body/shadow ramp, black inner outline (lit from top-left).
+        // The outer black outline runs the full window height so the title
+        // bar and borders read as one connected frame.
         let (t, b, l, r) = (bar.bottom(), rect.bottom(), rect.left(), rect.right());
+        vline(l, rect.top(), b, black);
+        vline(r - 1.0, rect.top(), b, black);
         // Left: outer black, bright, body x2, shadow, inner black.
         vline(l, t, b, black);
         vline(l + 1.0, t, b, colors.highlight);
@@ -426,8 +429,18 @@ fn paint_frame(
             hatch(ui, hr.shrink(3.0), theme.colors.text);
         }
     }
+}
 
-    // Grow box art; Standard hatched red box otherwise.
+/// Grow box art; the Standard red hatched corner box otherwise. Painted
+/// after the client content so nothing covers it, like real KDX windows.
+fn paint_grip(
+    ui: &mut Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    lay: &ChromeLayout,
+    colors: &ChromeColors,
+    focused: bool,
+) {
     let resize_slot = if focused {
         Slot::WindowResizeFocus
     } else {
@@ -441,14 +454,45 @@ fn paint_frame(
     if let (Some(tex), Some(img)) = (skin.get(resize_slot), theme.image(resize_slot)) {
         crate::paint::natural_at(ui.painter(), tex, img, lay.grip.min, Color32::WHITE);
     } else {
-        ui.painter().rect(
-            lay.grip,
+        // Standard grow box: a red plate merging into the frame corner,
+        // black-edged, bevelled, with bright diagonal grip stripes.
+        let g = lay.grip;
+        let p = ui.painter();
+        p.rect(
+            g,
             0.0,
-            colors.highlight,
+            colors.body,
             (1.0, Color32::BLACK),
             StrokeKind::Inside,
         );
-        hatch(ui, lay.grip.shrink(2.0), colors.shadow);
+        let inner = g.shrink(1.0);
+        p.line_segment(
+            [inner.left_top(), inner.right_top()],
+            (1.0, colors.highlight),
+        );
+        p.line_segment(
+            [inner.left_top(), inner.left_bottom()],
+            (1.0, colors.highlight),
+        );
+        p.line_segment(
+            [inner.left_bottom(), inner.right_bottom()],
+            (1.0, colors.shadow),
+        );
+        p.line_segment(
+            [inner.right_top(), inner.right_bottom()],
+            (1.0, colors.shadow),
+        );
+        // Diagonal stripes running bottom-left to top-right.
+        for i in 0..3 {
+            let o = 4.0 + i as f32 * 4.0;
+            p.line_segment(
+                [
+                    egui::pos2(g.right() - 3.0 - o, g.bottom() - 3.0),
+                    egui::pos2(g.right() - 3.0, g.bottom() - 3.0 - o),
+                ],
+                (1.5, colors.highlight),
+            );
+        }
     }
 }
 
@@ -520,11 +564,14 @@ pub fn grow_box_rect(ctx: &egui::Context) -> Option<Rect> {
 }
 
 fn content_ui(ui: &mut Ui, client: Rect) -> Ui {
-    ui.new_child(
+    let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(client)
             .layout(egui::Layout::top_down(egui::Align::Min)),
-    )
+    );
+    // KDX bars stack flush against each other with no gaps.
+    child.spacing_mut().item_spacing.y = 0.0;
+    child
 }
 
 /// Begin an OS window move when the given strip is dragged with the primary
