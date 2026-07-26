@@ -9,18 +9,31 @@
 
 namespace {
 
+constexpr int kMenuH = 20; // measured: menu bar rows 22..41
+constexpr int kTabH = 33;  // measured: tab strip rows 42..74
+
+const char *kMenus[] = {"File", "Tools", "Favorites", "Location",
+                        "Appearance"};
+const char *kMenuItems[5][6] = {
+    {"New", "Open...", "Save", "Save As...", "Close", "Quit"},
+    {"Find & Replace...", "Sort Lines", "Count Occurrences", nullptr},
+    {"Add Favorite", "Show Favorites", nullptr},
+    {"Documents Folder", "Desktop", nullptr},
+    {"Haxial Standard", nullptr},
+};
+
 struct App {
     Canvas canvas;
     ChromeLayout lay{};
     bool focused = true;
     int pressed_box = 0; // 1 close, 3 max, 4 min
     int hot_box = 0;
+    Rect menu_rects[5]{};
+    int open_menu = -1;
+    int hot_item = -1;
+    Rect dropdown{};
+    int item_h = 18;
 } g_app;
-
-constexpr int kMenuH = 20;
-constexpr int kTabH = 26;
-
-const char *kMenus[] = {"File", "Tools", "Favorites", "Location", "Appearance"};
 
 void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect c = lay.client;
@@ -28,24 +41,29 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     // Menu bar.
     Rect menu{c.x, c.y, c.w, kMenuH};
     raised_bar(cv, menu);
-    int x = menu.x + 12;
-    for (const char *m : kMenus) {
-        x = cv.text(x, menu.y + 2, m, kWhite);
-        x += 18;
+    int x = menu.x + 8;
+    for (int i = 0; i < 5; ++i) {
+        int tw = cv.text_width(kMenus[i]);
+        g_app.menu_rects[i] = {x, menu.y, tw + 12, kMenuH - 2};
+        if (g_app.open_menu == i) cv.fill(g_app.menu_rects[i], kBody);
+        cv.text(x + 6, menu.y + 2, kMenus[i], kWhite);
+        x += tw + 12;
     }
     // Save-state indicator triangle at the right of the menu bar.
     int tx = menu.right() - 16;
     for (int i = 0; i < 6; ++i)
         cv.hline(tx - i, tx + i + 1, menu.y + 4 + i, kGlyphGrey);
 
-    // Tab strip with one active red tab.
+    // Tab strip with one active red tab (measured: 33px strip, tab 4px
+    // below its top, 24px tall).
     Rect strip{c.x, menu.bottom(), c.w, kTabH};
     raised_bar(cv, strip);
-    Rect tab{strip.x + 9, strip.y + 4, 78, kTabH - 4};
+    Rect tab{strip.x + 4, strip.y + 4, 108, 24};
     bevel_box(cv, tab, false);
-    cv.fill({tab.x + 6, tab.y + 5, 8, 8}, kWhite);
-    cv.frame({tab.x + 6, tab.y + 5, 8, 8}, kDeep);
-    cv.text(tab.x + 20, tab.y + 3, "Untitled", kWhite);
+    // Save-state square icon, then the document name.
+    cv.fill({tab.x + 8, tab.y + 7, 10, 10}, Color{186, 118, 118});
+    cv.frame({tab.x + 8, tab.y + 7, 10, 10}, kDeep);
+    cv.text(tab.x + 24, tab.y + 4, "Untitled", kWhite);
 
     // Editor area: black, with sample green text.
     Rect editor{c.x, strip.bottom(), c.w - kScrollbar, c.bottom() - strip.bottom()};
@@ -96,6 +114,38 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
                  thumb.y + thumb.h / 2 - 3 + i * 3, kBarDark);
 }
 
+int menu_item_count(int m) {
+    int n = 0;
+    while (n < 6 && kMenuItems[m][n]) ++n;
+    return n;
+}
+
+// The open pull-down menu: dark raised panel, red hilite bar, painted last.
+void paint_dropdown(Canvas &cv) {
+    int m = g_app.open_menu;
+    if (m < 0) return;
+    int n = menu_item_count(m);
+    int wmax = 0;
+    for (int i = 0; i < n; ++i) {
+        int tw = cv.text_width(kMenuItems[m][i]);
+        if (tw > wmax) wmax = tw;
+    }
+    Rect r{g_app.menu_rects[m].x, g_app.menu_rects[m].bottom() + 2, wmax + 24,
+           n * g_app.item_h + 4};
+    g_app.dropdown = r;
+    cv.fill(r, kBarBody);
+    cv.frame(r, kBlack);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kBarLight);
+    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, kBarLight);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, kBarDark);
+    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, kBarDark);
+    for (int i = 0; i < n; ++i) {
+        Rect item{r.x + 2, r.y + 2 + i * g_app.item_h, r.w - 4, g_app.item_h};
+        if (i == g_app.hot_item) cv.fill(item, kBody);
+        cv.text(item.x + 10, item.y + 1, kMenuItems[m][i], kWhite);
+    }
+}
+
 void repaint(HWND hwnd) {
     RECT rc;
     GetClientRect(hwnd, &rc);
@@ -109,6 +159,7 @@ void repaint(HWND hwnd) {
                  g_app.pressed_box);
     paint_content(cv, g_app.lay);
     paint_grip(cv, g_app.lay.grip);
+    paint_dropdown(cv);
 }
 
 void blit(HDC hdc) {
@@ -143,7 +194,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ScreenToClient(hwnd, &pt);
             int x = pt.x, y = pt.y;
             const ChromeLayout &lay = g_app.lay;
-            if (box_at(x, y)) return HTCLIENT;
+            if (box_at(x, y) || g_app.open_menu >= 0) return HTCLIENT;
             if (lay.grip.contains(x, y)) return HTBOTTOMRIGHT;
             int w = lay.window.w, h = lay.window.h;
             bool left = x < kBorder, right = x >= w - kBorder;
@@ -160,7 +211,30 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         }
         case WM_LBUTTONDOWN: {
-            int b = box_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (g_app.open_menu >= 0) {
+                if (g_app.dropdown.contains(x, y)) {
+                    int i = (y - g_app.dropdown.y - 2) / g_app.item_h;
+                    int m = g_app.open_menu;
+                    g_app.open_menu = -1;
+                    if (i >= 0 && i < menu_item_count(m) && m == 0 &&
+                        (i == 4 || i == 5))
+                        DestroyWindow(hwnd); // Close / Quit
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                g_app.open_menu = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                // fall through to allow clicking another menu title
+            }
+            for (int i = 0; i < 5; ++i)
+                if (g_app.menu_rects[i].contains(x, y)) {
+                    g_app.open_menu = i;
+                    g_app.hot_item = -1;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            int b = box_at(x, y);
             if (b) {
                 g_app.pressed_box = b;
                 SetCapture(hwnd);
@@ -168,6 +242,25 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_MOUSEMOVE: {
+            if (g_app.open_menu >= 0) {
+                int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+                int hot = g_app.dropdown.contains(x, y)
+                              ? (y - g_app.dropdown.y - 2) / g_app.item_h
+                              : -1;
+                if (hot != g_app.hot_item) {
+                    g_app.hot_item = hot;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+            }
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE && g_app.open_menu >= 0) {
+                g_app.open_menu = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
         case WM_LBUTTONUP: {
             if (g_app.pressed_box) {
                 ReleaseCapture();

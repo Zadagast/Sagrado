@@ -10,8 +10,10 @@ constexpr Color kWhite{255, 255, 255};
 constexpr Color kBright{204, 0, 0};  // #CC0000
 constexpr Color kBody{136, 0, 0};    // #880000
 constexpr Color kDeep{68, 0, 0};     // #440000
-constexpr Color kGradTop{50, 0, 0};  // measured title gradient, row 2
-constexpr Color kGradBot{195, 0, 0}; // measured title gradient, row 19
+// The exact title gradient measured off the real window, rows 2..19.
+constexpr uint8_t kTitleGrad[18] = {50,  61,  72,  82,  93,  104,
+                                    114, 125, 136, 139, 146, 153,
+                                    160, 167, 174, 181, 188, 195};
 
 // Greys used by the menu/tab bars and scrollbars.
 constexpr Color kBarLight{102, 102, 102}; // #666666
@@ -65,11 +67,13 @@ inline void bevel_box(Canvas &cv, Rect r, bool pressed) {
 }
 
 inline void diagonal_hatch(Canvas &cv, Rect r, Color c) {
-    for (int i = -r.h; i < r.w; i += 4)
-        for (int y = 0; y < r.h; ++y) {
-            int x = i + y;
-            if (x >= 0 && x < r.w) cv.put(r.x + x, r.y + y, pack(c));
-        }
+    // 3px-wide stripes on a 7px period, like the real drag box.
+    for (int i = -r.h - 7; i < r.w; i += 7)
+        for (int t = 0; t < 3; ++t)
+            for (int y = 0; y < r.h; ++y) {
+                int x = i + t + y;
+                if (x >= 0 && x < r.w) cv.put(r.x + x, r.y + y, pack(c));
+            }
 }
 
 // The whole Standard frame: slab, gradient, lighting, client cutout, boxes.
@@ -81,8 +85,11 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
 
     // Slab body, then the title gradient flowing into the side borders.
     cv.fill(slab, kBody);
-    cv.vgradient({slab.x, 2, slab.w, kTitleH - 4}, focused ? kGradTop : kBlack,
-                 focused ? kGradBot : kDeep);
+    for (int i = 0; i < 18; ++i) {
+        uint8_t v = focused ? kTitleGrad[i] : uint8_t(kTitleGrad[i] / 3);
+        cv.hline(slab.x, slab.right(), 2 + i, Color{v, 0, 0});
+    }
+    cv.hline(slab.x, slab.right(), kTitleH - 2, kDeep);
 
     // Bright faces (light from the top-left).
     cv.hline(slab.x, slab.right(), slab.y, kBright);
@@ -121,10 +128,10 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
                         lay.hatch_box.w - 6, lay.hatch_box.h - 6},
                    kWhite);
     bevel_box(cv, lay.max_box, pressed_box == 3);
-    cv.fill({lay.max_box.x + 3, lay.max_box.y + 6, 8, 2}, kWhite);
-    cv.fill({lay.max_box.x + 6, lay.max_box.y + 3, 2, 8}, kWhite);
+    cv.fill({lay.max_box.x + 2, lay.max_box.y + 6, 10, 3}, kWhite);
+    cv.fill({lay.max_box.x + 6, lay.max_box.y + 2, 3, 10}, kWhite);
     bevel_box(cv, lay.min_box, pressed_box == 4);
-    cv.fill({lay.min_box.x + 3, lay.min_box.y + 6, 8, 2}, kWhite);
+    cv.fill({lay.min_box.x + 2, lay.min_box.y + 6, 10, 3}, kWhite);
 
     (void)hot_box;
 }
