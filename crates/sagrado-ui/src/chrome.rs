@@ -20,7 +20,7 @@ use crate::paint::{natural, nine_slice, SkinTextures};
 /// measured from the real Haxial TextEdit under Wine.
 const STD_TITLE_H: f32 = 22.0;
 const STD_BORDER: f32 = 6.0;
-const STD_BTN: Vec2 = Vec2::new(19.0, 15.0);
+const STD_BTN: Vec2 = Vec2::new(14.0, 14.0);
 const STD_GRIP: f32 = 20.0;
 
 /// The chrome buttons a window can have.
@@ -55,15 +55,6 @@ impl ChromeButton {
                 Slot::WindowMenuFocus,
                 Slot::WindowMenuHilited,
             ),
-        }
-    }
-
-    fn glyph(self) -> &'static str {
-        match self {
-            ChromeButton::Close => "X",
-            ChromeButton::Minimize => "-",
-            ChromeButton::Maximize => "+",
-            ChromeButton::WindowMenu => "",
         }
     }
 
@@ -204,16 +195,17 @@ fn layout(theme: &Theme, rect: Rect, focused: bool) -> ChromeLayout {
 
     let mut hatch_box = None;
     if !any_button_art {
-        // Standard layout: X box + hatch stripes top-left, +/− top-right,
-        // sitting low in the bar so the gradient shows above them.
-        let cy = title_bar.top() + 12.0;
-        let close = Rect::from_center_size(egui::pos2(rect.left() + 5.0 + 9.5, cy), STD_BTN);
-        let hatch = Rect::from_center_size(
-            egui::pos2(close.right() + 6.0 + 16.0, cy),
+        // Standard layout, from the real Haxial window: 14x14 boxes 4px
+        // below the top — X + hatch stripes on the left, +/− on the right
+        // with the minimize box flush against the client's right edge.
+        let top = title_bar.top() + 4.0;
+        let close = Rect::from_min_size(egui::pos2(rect.left() + 5.0, top), STD_BTN);
+        let hatch = Rect::from_min_size(
+            egui::pos2(close.right() + 9.0, top),
             Vec2::new(32.0, STD_BTN.y),
         );
-        let min = Rect::from_center_size(egui::pos2(rect.right() - 5.0 - 9.5, cy), STD_BTN);
-        let max = Rect::from_center_size(egui::pos2(min.left() - 3.0 - 9.5, cy), STD_BTN);
+        let min = Rect::from_min_size(egui::pos2(client.right() - STD_BTN.x, top), STD_BTN);
+        let max = Rect::from_min_size(egui::pos2(min.left() - 4.0 - STD_BTN.x, top), STD_BTN);
         occupied_left = hatch.right() - rect.left();
         occupied_right = rect.right() - max.left();
         buttons.push((ChromeButton::Close, close));
@@ -246,8 +238,11 @@ fn layout(theme: &Theme, rect: Rect, focused: bool) -> ChromeLayout {
             Rect::from_min_size(pos, Vec2::new(w as f32, h as f32))
         }
         None => Rect::from_min_max(
-            egui::pos2(rect.right() - STD_GRIP, rect.bottom() - STD_GRIP),
-            rect.max,
+            egui::pos2(
+                rect.right() - 1.0 - STD_GRIP,
+                rect.bottom() - 1.0 - STD_GRIP,
+            ),
+            egui::pos2(rect.right() - 1.0, rect.bottom() - 1.0),
         ),
     };
 
@@ -485,18 +480,15 @@ fn paint_grip(
     if let (Some(tex), Some(img)) = (skin.get(resize_slot), theme.image(resize_slot)) {
         crate::paint::natural_at(ui.painter(), tex, img, lay.grip.min, Color32::WHITE);
     } else {
-        // Standard grow box: a red plate merging into the frame corner,
-        // black-edged, bevelled, with bright diagonal grip stripes.
+        // Standard grow box: a red plate merging into the frame corner.
+        // Black only on its top and left edges (the window outline provides
+        // the outer edges), bright bevel inside, shadow toward the corner.
         let g = lay.grip;
         let p = ui.painter();
-        p.rect(
-            g,
-            0.0,
-            colors.body,
-            (1.0, Color32::BLACK),
-            StrokeKind::Inside,
-        );
-        let inner = g.shrink(1.0);
+        p.rect_filled(g, 0.0, colors.body);
+        p.line_segment([g.left_top(), g.right_top()], (1.0, Color32::BLACK));
+        p.line_segment([g.left_top(), g.left_bottom()], (1.0, Color32::BLACK));
+        let inner = Rect::from_min_max(g.min + Vec2::splat(1.0), g.max);
         p.line_segment(
             [inner.left_top(), inner.right_top()],
             (1.0, colors.highlight),
@@ -576,15 +568,35 @@ fn paint_button(
         return;
     }
     chrome_bevel_box(ui, rect, colors, pressed);
-    let glyph = btn.glyph();
-    if !glyph.is_empty() {
-        ui.painter().text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            glyph,
-            crate::fonts::ui_font(),
-            colors.glyph,
-        );
+    // Thick white glyphs drawn as shapes, like the real Standard chrome.
+    let p = ui.painter();
+    let c = rect.center();
+    match btn {
+        ChromeButton::Close => {
+            let r = rect.shrink(4.0);
+            p.line_segment([r.left_top(), r.right_bottom()], (2.0, colors.glyph));
+            p.line_segment([r.right_top(), r.left_bottom()], (2.0, colors.glyph));
+        }
+        ChromeButton::Minimize => {
+            p.rect_filled(
+                Rect::from_center_size(c, Vec2::new(8.0, 2.0)),
+                0.0,
+                colors.glyph,
+            );
+        }
+        ChromeButton::Maximize => {
+            p.rect_filled(
+                Rect::from_center_size(c, Vec2::new(8.0, 2.0)),
+                0.0,
+                colors.glyph,
+            );
+            p.rect_filled(
+                Rect::from_center_size(c, Vec2::new(2.0, 8.0)),
+                0.0,
+                colors.glyph,
+            );
+        }
+        ChromeButton::WindowMenu => {}
     }
 }
 

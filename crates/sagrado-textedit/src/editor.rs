@@ -51,16 +51,12 @@ pub fn editor(
 
     // Reserve the whole editor rect, then carve out the scroll-bar gutters so
     // the KDX bars sit flush against the text like a classic Haxial window.
+    // No border of our own: the window's client-hole outline is the frame,
+    // so the editor and its bars sit flush against it like real KDX.
     let outer = ui.available_rect_before_wrap();
     ui.allocate_rect(outer, egui::Sense::hover());
-    ui.painter().rect(
-        outer,
-        0.0,
-        c.text_box_background,
-        (1.0, c.primary_frame),
-        egui::StrokeKind::Inside,
-    );
-    let inner = outer.shrink(1.0);
+    ui.painter().rect_filled(outer, 0.0, c.text_box_background);
+    let inner = outer;
     let text_rect = Rect::from_min_max(
         inner.min,
         egui::pos2(
@@ -146,9 +142,11 @@ pub fn editor(
         Some(grip) if grip.top() < text_rect.bottom() && grip.left() < inner.right() => grip.top(),
         _ => text_rect.bottom(),
     };
+    // Extend 1px into the window's client outline so the bar's border and
+    // the frame outline are the same single black line.
     let v_rect = Rect::from_min_max(
         egui::pos2(text_rect.right(), text_rect.top()),
-        egui::pos2(inner.right(), v_bottom),
+        egui::pos2(inner.right() + 1.0, v_bottom),
     );
     if widgets::v_scrollbar_in(
         ui,
@@ -181,7 +179,7 @@ pub fn editor(
         };
         let h_rect = Rect::from_min_max(
             egui::pos2(text_rect.left(), text_rect.bottom()),
-            egui::pos2(text_rect.right(), inner.bottom()),
+            egui::pos2(text_rect.right(), inner.bottom() + 1.0),
         );
         if widgets::h_scrollbar_in(
             ui,
