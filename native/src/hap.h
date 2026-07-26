@@ -24,6 +24,91 @@
 
 constexpr int kColorTableLen = 204;
 
+// Semantic names for every color-table entry, verified against the real
+// AppearanceEdit 1.24/1.4 under Wine: a probe .hap with color[i] = i·0x010101
+// was loaded and every named swatch in the Colors panel read back its file
+// index. Entries 25-28, 148-152 and 199-203 are not exposed by any
+// AppearanceEdit version (reserved). See docs/hap-color-table.md.
+enum HapColor : int {
+    ColPrimaryLight = 1,
+    ColPrimaryBackground = 2,
+    ColPrimaryDark = 3,
+    ColPrimaryFrame = 4,
+    ColPrimaryLabel = 5,
+    ColPrimaryDisableFrame = 6,
+    ColPrimaryDisableLabel = 7,
+    ColImportantLabel = 8,
+    ColFocusBox = 9,
+    ColTextBoxBackground = 10,
+    ColTextBoxForeground = 11,
+    ColTextHiliteBackground = 12,
+    ColTextHiliteForeground = 13,
+    ColTextInsertionPoint = 14,
+    ColListBackground = 15,
+    ColListLabel = 16,
+    ColListHiliteBackground = 17,
+    ColListHiliteForeground = 18,
+    ColListSortColumnBackground = 19,
+    ColListSeparator = 20,
+    ColWorkspaceBackground1 = 21, // ..24 = Workspace Background 2..4
+    ColButtonLight2 = 29,         // 29..35 = L2,L1,Button,D1,D2,Frame,Label
+    ColButtonFrame = 34,
+    ColButtonLabel = 35,
+    ColButtonHiliteLight2 = 36, // 36..42, same layout
+    ColButtonHiliteLabel = 42,
+    ColButtonDisableLight2 = 43, // 43..49, same layout
+    ColButtonDisableLabel = 49,
+    ColDefaultButtonLight = 50, // 50..53 = Light,Button,Dark,Frame
+    ColWindowLight2 = 54,       // 54..60 = L2,L1,Window,D1,D2,Frame,Label
+    ColWindowLabel = 60,
+    ColWindowTransition1 = 61, // ..78 = Window Transition 1..18
+    ColWindowFocusLight2 = 79, // 79..85, same layout as 54..60
+    ColWindowFocusLabel = 85,
+    ColWindowFocusTransition1 = 86, // ..103
+    ColMenuLight = 104,
+    ColMenuBackground = 105,
+    ColMenuDark = 106,
+    ColMenuLabel = 107,
+    ColMenuHiliteLight = 108,
+    ColMenuHiliteBackground = 109,
+    ColMenuHiliteDark = 110,
+    ColMenuHiliteLabel = 111,
+    ColMenuDisableLabel = 112,
+    ColProgressTransition1 = 113, // ..122 = Progress Transition 1..10
+    ColProgressBkgndLight = 123,
+    ColProgressBkgnd = 124,
+    ColProgressBkgndDark = 125,
+    ColProgressFrame = 126,
+    ColProgressLabel = 127,
+    ColScrollBarFrame = 128,
+    ColScrollBarLight = 129,
+    ColScrollBar = 130,
+    ColScrollBarDark = 131,
+    ColScrollBarLabel = 132,
+    ColScrollBarHiliteLight = 133, // 133..136 = Light,Hilite,Dark,Label
+    ColScrollBarIndicatorLight = 137,
+    ColScrollBarIndicator = 138,
+    ColScrollBarIndicatorDark = 139,
+    ColScrollBarIndicatorHiliteLight = 140, // 140..142 = Light,Hilite,Dark
+    ColScrollBarBkgndLight2 = 143,          // 143..147 = L2,L1,Bkgnd,D1,D2
+    ColScrollBarBkgnd = 145,
+    ColScrollBarDisableLight = 153, // 153..157 = Light,Disable,Dark,Frame,Label
+    ColSliderIndicatorLight = 158,  // 158..161 = Light,Indicator,Dark,Frame
+    ColSliderIndicatorHiliteLight = 162, // 162..165, same layout
+    ColSliderBar = 166,                  // 166..169 = Bar,Frame,Hilite,HFrame
+    ColSliderDisableLight = 170,         // 170..173 = Light,Disable,Dark,Frame
+    ColColumnHeaderFrame = 174,
+    ColColumnHeaderLight = 175,
+    ColColumnHeader = 176,
+    ColColumnHeaderDark = 177,
+    ColColumnHeaderLabel = 178,
+    ColColumnHeaderHiliteLight = 179,
+    ColColumnHeaderHilite = 180,
+    ColColumnHeaderHiliteDark = 181,
+    ColColumnHeaderHiliteLabel = 182,
+    ColFileLabel0 = 183, // ..198 = File Label 0..15 (list-item label tints)
+};
+
 // Image slots (indices into the .hap image table), AppearanceEdit names.
 enum Slot : int {
     SlotPushButtonNormal = 25,

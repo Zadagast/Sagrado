@@ -163,10 +163,11 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     if (frame) {
         cv.nine_slice(*frame, win);
         int tw = cv.text_width(title);
-        // Title text: the theme's Label / Disabled Label color entries.
+        // Title text: the theme's Window Focus Label / Window Label entries.
         Color tc = focused ? kWhite : kGlyphGrey;
         if (theme->has_colors) {
-            uint32_t v = theme->color(focused ? 5 : 7);
+            uint32_t v =
+                theme->color(focused ? ColWindowFocusLabel : ColWindowLabel);
             tc = {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
         }
         cv.text((win.w - tw) / 2, (lay.title_h - kFontHeight) / 2, title, tc);
@@ -287,16 +288,31 @@ struct UiColors {
     Color hilite, hilite_text;           // menu hilite bar
     Color editor_bg, editor_fg;          // text box background/foreground
     Color track, thumb, thumb_hi;        // scrollbar
+    Color tab, tab_light, tab_dark, tab_text; // active tab plate
 };
 
 inline UiColors ui_colors(const Theme *theme) {
     if (!theme || !theme->has_colors)
-        return {kBarLight, kBarBody,        kBarDark, kWhite,
-                kBody,     kWhite,          kBlack,   Color{0, 204, 0},
-                kTrack,    kThumb,          kThumbHi};
+        return {kBarLight, kBarBody, kBarDark, kWhite,
+                kBody,     kWhite,   kBlack,   Color{0, 204, 0},
+                kTrack,    kThumb,   kThumbHi, kBody,
+                kBright,   kDeep,    kWhite};
     auto c = [&](int i) { return from_u32(theme->color(i)); };
-    return {c(1), c(2),  c(3), c(5), c(12), c(13),
-            c(10), c(11), c(3), c(2), c(1)};
+    return {c(ColMenuLight),
+            c(ColMenuBackground),
+            c(ColMenuDark),
+            c(ColMenuLabel),
+            c(ColMenuHiliteBackground),
+            c(ColMenuHiliteLabel),
+            c(ColTextBoxBackground),
+            c(ColTextBoxForeground),
+            c(ColScrollBarBkgnd),
+            c(ColScrollBarIndicator),
+            c(ColScrollBarIndicatorLight),
+            c(ColColumnHeaderHilite),
+            c(ColColumnHeaderHiliteLight),
+            c(ColColumnHeaderHiliteDark),
+            c(ColColumnHeaderHiliteLabel)};
 }
 
 // A raised bar (menu bar / tab strip base), lit from the top.

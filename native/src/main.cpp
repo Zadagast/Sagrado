@@ -138,15 +138,15 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Color tab_text = kWhite;
     if (tab_art) {
         cv.nine_slice(*tab_art, tab);
-        tab_text = uc.text;
+        tab_text = uc.tab_text;
     } else if (theme && theme->has_colors) {
-        cv.fill(tab, uc.hilite);
-        cv.frame(tab, kBlack);
-        cv.hline(tab.x + 1, tab.right() - 1, tab.y + 1, uc.bar_light);
-        cv.vline(tab.x + 1, tab.y + 1, tab.bottom() - 1, uc.bar_light);
-        cv.hline(tab.x + 1, tab.right() - 1, tab.bottom() - 2, uc.bar_dark);
-        cv.vline(tab.right() - 2, tab.y + 1, tab.bottom() - 1, uc.bar_dark);
-        tab_text = uc.hilite_text;
+        cv.fill(tab, uc.tab);
+        cv.frame(tab, from_u32(theme->color(ColColumnHeaderFrame)));
+        cv.hline(tab.x + 1, tab.right() - 1, tab.y + 1, uc.tab_light);
+        cv.vline(tab.x + 1, tab.y + 1, tab.bottom() - 1, uc.tab_light);
+        cv.hline(tab.x + 1, tab.right() - 1, tab.bottom() - 2, uc.tab_dark);
+        cv.vline(tab.right() - 2, tab.y + 1, tab.bottom() - 1, uc.tab_dark);
+        tab_text = uc.tab_text;
     } else {
         bevel_box(cv, tab, false);
     }
