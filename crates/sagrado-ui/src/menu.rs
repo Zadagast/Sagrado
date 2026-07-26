@@ -68,9 +68,9 @@ impl Menu {
 pub fn menu_bar(ui: &mut Ui, theme: &Theme, menus: &[Menu], unsaved: bool) -> Option<String> {
     let c = theme.colors;
     let font = fonts::ui_font();
-    let bar_h = 26.0;
+    let bar_h = 22.0;
     let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), bar_h), Sense::hover());
-    ui.painter().rect_filled(bar, 0.0, c.primary_background);
+    raised_bar(ui, theme, bar);
 
     // Index of the currently-open menu, self-managed so we control closing.
     let state_id = ui.id().with("menubar_open");
@@ -146,6 +146,35 @@ pub fn menu_bar(ui: &mut Ui, theme: &Theme, menus: &[Menu], unsaved: bool) -> Op
         ui.ctx().request_repaint();
     }
     chosen
+}
+
+/// A raised KDX bar: light top edge, flat body, dark line and black bottom
+/// edge — the bevel Haxial gives the menu bar and tab strip.
+fn raised_bar(ui: &Ui, theme: &Theme, r: Rect) {
+    let c = theme.colors;
+    let p = ui.painter();
+    p.rect_filled(r, 0.0, c.primary_background);
+    p.line_segment(
+        [
+            egui::pos2(r.left(), r.top() + 0.5),
+            egui::pos2(r.right(), r.top() + 0.5),
+        ],
+        (1.0, c.primary_light),
+    );
+    p.line_segment(
+        [
+            egui::pos2(r.left(), r.bottom() - 1.5),
+            egui::pos2(r.right(), r.bottom() - 1.5),
+        ],
+        (1.0, c.primary_dark),
+    );
+    p.line_segment(
+        [
+            egui::pos2(r.left(), r.bottom() - 0.5),
+            egui::pos2(r.right(), r.bottom() - 0.5),
+        ],
+        (1.0, Color32::BLACK),
+    );
 }
 
 /// Haxial's save indicator at the right of the menu bar: a plain grey
@@ -327,65 +356,67 @@ pub fn doc_tabs(
 ) -> Option<TabEvent> {
     let c = theme.colors;
     let table = |i: usize, def: Color32| theme.color_table.get(i).copied().unwrap_or(def);
-    // KDX's active tab is a bright red plate with a black border; the strip
-    // behind is the grey primary background.
-    let active_fill = table(36, c.selection);
-    let active_shadow = table(40, c.primary_frame);
+    // KDX's active tab is a raised red plate: black border, red body with a
+    // bright top-left bevel and a dark bottom-right shadow.
+    let plate_hi = table(36, c.selection);
+    let plate_body = table(38, c.selection);
+    let plate_shadow = table(40, c.primary_frame);
     let font = fonts::ui_font();
+    let strip_h = 26.0;
     let tab_h = 22.0;
     let mut event = None;
 
-    let strip = Rect::from_min_size(
-        ui.cursor().min,
-        Vec2::new(ui.available_width(), tab_h + 4.0),
-    );
-    ui.painter().rect_filled(strip, 0.0, c.primary_background);
-    ui.painter().line_segment(
-        [strip.left_bottom(), strip.right_bottom()],
-        (1.0, Color32::BLACK),
-    );
+    let strip = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), strip_h));
+    raised_bar(ui, theme, strip);
 
     ui.horizontal(|ui| {
-        ui.add_space(4.0);
-        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.add_space(9.0);
+        ui.spacing_mut().item_spacing.x = 4.0;
         for (i, name) in tabs.iter().enumerate() {
             let text_w = ui
                 .painter()
                 .layout_no_wrap(name.clone(), font.clone(), c.text)
                 .size()
                 .x;
-            let w = text_w + 32.0;
-            ui.add_space(0.0);
-            let (row, _) = ui.allocate_exact_size(Vec2::new(w, tab_h + 4.0), Sense::hover());
-            let rect =
-                Rect::from_min_size(egui::pos2(row.left(), row.top() + 2.0), Vec2::new(w, tab_h));
+            let w = text_w + 40.0;
+            let (row, _) = ui.allocate_exact_size(Vec2::new(w, strip_h), Sense::hover());
+            let rect = Rect::from_min_size(
+                egui::pos2(row.left(), strip.top() + 4.0),
+                Vec2::new(w, tab_h),
+            );
             let resp = ui.interact(rect, ui.id().with(("tab", i)), Sense::click());
             let active = i == selected;
             let p = ui.painter();
             if active {
-                // Red plate: black border, red fill, bottom-right shadow.
                 p.rect(
                     rect,
                     0.0,
-                    active_fill,
+                    plate_body,
                     (1.0, Color32::BLACK),
                     StrokeKind::Inside,
                 );
+                let inner = rect.shrink(1.0);
+                p.line_segment([inner.left_top(), inner.right_top()], (1.0, plate_hi));
+                p.line_segment([inner.left_top(), inner.left_bottom()], (1.0, plate_hi));
                 p.line_segment(
-                    [rect.left_bottom(), rect.right_bottom()],
-                    (2.0, active_shadow),
+                    [inner.left_bottom(), inner.right_bottom()],
+                    (1.0, plate_shadow),
+                );
+                p.line_segment(
+                    [inner.right_top(), inner.right_bottom()],
+                    (1.0, plate_shadow),
                 );
             }
             let fg = if active { c.selection_text } else { c.text };
             p.text(
-                egui::pos2(rect.left() + 7.0, rect.center().y),
+                egui::pos2(rect.left() + 8.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 "▤",
                 font.clone(),
                 fg,
             );
             p.text(
-                egui::pos2(rect.left() + 22.0, rect.center().y),
+                egui::pos2(rect.left() + 24.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 name,
                 font.clone(),

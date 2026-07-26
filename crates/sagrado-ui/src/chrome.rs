@@ -16,11 +16,12 @@ use sagrado_theme::{Slot, Theme};
 
 use crate::paint::{natural, nine_slice, SkinTextures};
 
-/// Standard-chrome metrics used when the theme carries no window art.
-const STD_TITLE_H: f32 = 20.0;
-const STD_BORDER: f32 = 5.0;
-const STD_BTN: Vec2 = Vec2::new(16.0, 13.0);
-const STD_GRIP: f32 = 13.0;
+/// Standard-chrome metrics used when the theme carries no window art,
+/// measured from the real Haxial TextEdit under Wine.
+const STD_TITLE_H: f32 = 22.0;
+const STD_BORDER: f32 = 6.0;
+const STD_BTN: Vec2 = Vec2::new(19.0, 15.0);
+const STD_GRIP: f32 = 17.0;
 
 /// The chrome buttons a window can have.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,11 +93,13 @@ struct ChromeLayout {
 /// Colors the Standard primitives are drawn with, resolved from the theme's
 /// color table (window-frame ramp, entries 36..40) with generic fallbacks.
 struct ChromeColors {
-    fill: Color32,
-    fill_top: Color32,
-    fill_bottom: Color32,
-    pressed: Color32,
+    highlight: Color32,
+    body: Color32,
     shadow: Color32,
+    grad_top: Color32,
+    grad_bottom: Color32,
+    pressed: Color32,
+    glyph: Color32,
     text: Color32,
 }
 
@@ -105,20 +108,35 @@ impl ChromeColors {
         let c = theme.colors;
         let table = |i: usize, def: Color32| theme.color_table.get(i).copied().unwrap_or(def);
         let bright = table(36, c.primary_dark);
-        let dark = table(38, c.primary_frame);
+        let body = table(38, c.primary_frame);
         let deep = table(40, c.primary_frame);
-        let (fill_top, fill_bottom) = if focused {
-            (bright, dark)
+        // The title-bar gradient runs from near-black at the top up to almost
+        // the bright frame color at the bottom.
+        let dim = |col: Color32, f: f32| {
+            Color32::from_rgb(
+                (col.r() as f32 * f) as u8,
+                (col.g() as f32 * f) as u8,
+                (col.b() as f32 * f) as u8,
+            )
+        };
+        let (grad_top, grad_bottom) = if focused {
+            (dim(bright, 0.25), dim(bright, 0.96))
         } else {
-            (dark, deep)
+            (dim(body, 0.25), dim(body, 0.96))
         };
         Self {
-            fill: if focused { bright } else { dark },
-            fill_top,
-            fill_bottom,
-            pressed: dark,
+            highlight: bright,
+            body: if focused { body } else { deep },
             shadow: deep,
-            text: if focused { c.text } else { c.disabled_text },
+            grad_top,
+            grad_bottom,
+            pressed: deep,
+            glyph: table(42, c.text),
+            text: if focused {
+                table(42, c.text)
+            } else {
+                c.disabled_text
+            },
         }
     }
 }
@@ -186,15 +204,16 @@ fn layout(theme: &Theme, rect: Rect, focused: bool) -> ChromeLayout {
 
     let mut hatch_box = None;
     if !any_button_art {
-        // Standard layout: X box + hatch stripes top-left, +/− top-right.
-        let cy = title_bar.center().y;
-        let close = Rect::from_center_size(egui::pos2(rect.left() + 12.0, cy), STD_BTN);
+        // Standard layout: X box + hatch stripes top-left, +/− top-right,
+        // sitting low in the bar so the gradient shows above them.
+        let cy = title_bar.top() + 12.0;
+        let close = Rect::from_center_size(egui::pos2(rect.left() + 5.0 + 9.5, cy), STD_BTN);
         let hatch = Rect::from_center_size(
-            egui::pos2(close.right() + 17.0, cy),
-            Vec2::new(26.0, STD_BTN.y),
+            egui::pos2(close.right() + 6.0 + 16.0, cy),
+            Vec2::new(32.0, STD_BTN.y),
         );
-        let min = Rect::from_center_size(egui::pos2(rect.right() - 12.0, cy), STD_BTN);
-        let max = Rect::from_center_size(egui::pos2(min.left() - 12.0, cy), STD_BTN);
+        let min = Rect::from_center_size(egui::pos2(rect.right() - 5.0 - 9.5, cy), STD_BTN);
+        let max = Rect::from_center_size(egui::pos2(min.left() - 3.0 - 9.5, cy), STD_BTN);
         occupied_left = hatch.right() - rect.left();
         occupied_right = rect.right() - max.left();
         buttons.push((ChromeButton::Close, close));
@@ -271,6 +290,8 @@ pub fn window_frame(
 
             let lay = layout(theme, rect, focused);
             let colors = ChromeColors::resolve(theme, focused);
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("sagrado_grow_box"), lay.grip));
 
             paint_frame(ui, theme, skin, rect, &lay, &colors, focused);
 
@@ -340,43 +361,69 @@ fn paint_frame(
         nine_slice(ui.painter(), tex, img, rect, Color32::WHITE);
     } else {
         let black = Color32::BLACK;
-        // Frame: black outline, red band, black inner outline.
-        ui.painter()
-            .rect(rect, 0.0, colors.fill, (1.0, black), StrokeKind::Inside);
-        ui.painter().rect_stroke(
-            rect.shrink(1.0),
-            0.0,
-            (STD_BORDER - 2.0, colors.fill),
-            StrokeKind::Inside,
-        );
-        ui.painter().rect_stroke(
-            rect.shrink(STD_BORDER - 1.0),
-            0.0,
-            (1.0, black),
-            StrokeKind::Inside,
-        );
-        // Title bar: vertical gradient, bright at the top fading darker.
+        let p = ui.painter();
+        let vline = |x: f32, y0: f32, y1: f32, col: Color32| {
+            p.line_segment(
+                [egui::pos2(x + 0.5, y0), egui::pos2(x + 0.5, y1)],
+                (1.0, col),
+            );
+        };
+        let hline = |y: f32, x0: f32, x1: f32, col: Color32| {
+            p.line_segment(
+                [egui::pos2(x0, y + 0.5), egui::pos2(x1, y + 0.5)],
+                (1.0, col),
+            );
+        };
+
+        // Title bar: black top line, bright highlight line, then a vertical
+        // gradient running dark to bright, a shadow line and a black line.
         let bar = lay.title_bar;
+        hline(bar.top(), bar.left(), bar.right(), black);
+        hline(bar.top() + 1.0, bar.left(), bar.right(), colors.highlight);
+        let grad = Rect::from_min_max(
+            egui::pos2(bar.left(), bar.top() + 2.0),
+            egui::pos2(bar.right(), bar.bottom() - 2.0),
+        );
         let mut mesh = egui::Mesh::default();
-        mesh.colored_vertex(bar.left_top(), colors.fill_top);
-        mesh.colored_vertex(bar.right_top(), colors.fill_top);
-        mesh.colored_vertex(bar.right_bottom(), colors.fill_bottom);
-        mesh.colored_vertex(bar.left_bottom(), colors.fill_bottom);
+        mesh.colored_vertex(grad.left_top(), colors.grad_top);
+        mesh.colored_vertex(grad.right_top(), colors.grad_top);
+        mesh.colored_vertex(grad.right_bottom(), colors.grad_bottom);
+        mesh.colored_vertex(grad.left_bottom(), colors.grad_bottom);
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
-        ui.painter().add(egui::Shape::mesh(mesh));
-        ui.painter().line_segment(
-            [
-                egui::pos2(bar.left(), bar.bottom() - 0.5),
-                egui::pos2(bar.right(), bar.bottom() - 0.5),
-            ],
-            (1.0, black),
-        );
+        p.add(egui::Shape::mesh(mesh));
+        hline(bar.bottom() - 2.0, bar.left(), bar.right(), colors.shadow);
+        hline(bar.bottom() - 1.0, bar.left(), bar.right(), black);
+
+        // Side and bottom borders: a raised red ridge — black outline,
+        // bright/body/shadow ramp, black inner outline (lit from top-left).
+        let (t, b, l, r) = (bar.bottom(), rect.bottom(), rect.left(), rect.right());
+        // Left: outer black, bright, body x2, shadow, inner black.
+        vline(l, t, b, black);
+        vline(l + 1.0, t, b, colors.highlight);
+        vline(l + 2.0, t, b, colors.body);
+        vline(l + 3.0, t, b, colors.body);
+        vline(l + 4.0, t, b, colors.shadow);
+        vline(l + 5.0, t, b, black);
+        // Right: inner black, bright, body x2, shadow, outer black.
+        vline(r - 6.0, t, b, black);
+        vline(r - 5.0, t, b, colors.highlight);
+        vline(r - 4.0, t, b, colors.body);
+        vline(r - 3.0, t, b, colors.body);
+        vline(r - 2.0, t, b, colors.shadow);
+        vline(r - 1.0, t, b, black);
+        // Bottom: inner black, bright, body x2, shadow, outer black.
+        hline(b - 6.0, l, r, black);
+        hline(b - 5.0, l, r, colors.highlight);
+        hline(b - 4.0, l, r, colors.body);
+        hline(b - 3.0, l, r, colors.body);
+        hline(b - 2.0, l, r, colors.shadow);
+        hline(b - 1.0, l, r, black);
+
         // Hatched drag stripes next to the close box.
         if let Some(hr) = lay.hatch_box {
-            ui.painter()
-                .rect(hr, 0.0, colors.fill, (1.0, black), StrokeKind::Inside);
-            hatch(ui, hr.shrink(2.0), theme.colors.text);
+            chrome_bevel_box(ui, hr, colors, false);
+            hatch(ui, hr.shrink(3.0), theme.colors.text);
         }
     }
 
@@ -397,12 +444,30 @@ fn paint_frame(
         ui.painter().rect(
             lay.grip,
             0.0,
-            colors.fill,
+            colors.highlight,
             (1.0, Color32::BLACK),
             StrokeKind::Inside,
         );
         hatch(ui, lay.grip.shrink(2.0), colors.shadow);
     }
+}
+
+/// A Standard title-bar box: black border, body fill and a bright top-left /
+/// dark bottom-right inner bevel.
+fn chrome_bevel_box(ui: &Ui, r: Rect, colors: &ChromeColors, pressed: bool) {
+    let p = ui.painter();
+    let fill = if pressed { colors.pressed } else { colors.body };
+    p.rect(r, 0.0, fill, (1.0, Color32::BLACK), StrokeKind::Inside);
+    let inner = r.shrink(1.0);
+    let (tl, br) = if pressed {
+        (colors.shadow, colors.highlight)
+    } else {
+        (colors.highlight, colors.shadow)
+    };
+    p.line_segment([inner.left_top(), inner.right_top()], (1.0, tl));
+    p.line_segment([inner.left_top(), inner.left_bottom()], (1.0, tl));
+    p.line_segment([inner.left_bottom(), inner.right_bottom()], (1.0, br));
+    p.line_segment([inner.right_top(), inner.right_bottom()], (1.0, br));
 }
 
 /// One title-bar button: per-state art centred in the stable rect, or the
@@ -435,9 +500,7 @@ fn paint_button(
         }
         return;
     }
-    let fill = if pressed { colors.pressed } else { colors.fill };
-    ui.painter()
-        .rect(rect, 0.0, fill, (1.0, Color32::BLACK), StrokeKind::Inside);
+    chrome_bevel_box(ui, rect, colors, pressed);
     let glyph = btn.glyph();
     if !glyph.is_empty() {
         ui.painter().text(
@@ -445,9 +508,15 @@ fn paint_button(
             Align2::CENTER_CENTER,
             glyph,
             crate::fonts::ui_font(),
-            theme.colors.text,
+            colors.glyph,
         );
     }
+}
+
+/// The window's grow-box rect this frame, so content (e.g. a scrollbar in
+/// the bottom-right) can stop short of it like classic KDX windows do.
+pub fn grow_box_rect(ctx: &egui::Context) -> Option<Rect> {
+    ctx.data(|d| d.get_temp(egui::Id::new("sagrado_grow_box")))
 }
 
 fn content_ui(ui: &mut Ui, client: Rect) -> Ui {

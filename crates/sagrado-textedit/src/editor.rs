@@ -5,7 +5,7 @@ use eframe::egui::{
     Rect, Ui, Vec2,
 };
 use sagrado_theme::Theme;
-use sagrado_ui::{widgets, SkinTextures};
+use sagrado_ui::{chrome, widgets, SkinTextures};
 
 use crate::document::Document;
 
@@ -141,9 +141,14 @@ pub fn editor(
     } else {
         1.0
     };
+    // Stop the bar above the window's grow box, like classic KDX windows.
+    let v_bottom = match chrome::grow_box_rect(ui.ctx()) {
+        Some(grip) if grip.top() < text_rect.bottom() && grip.left() < inner.right() => grip.top(),
+        _ => text_rect.bottom(),
+    };
     let v_rect = Rect::from_min_max(
         egui::pos2(text_rect.right(), text_rect.top()),
-        egui::pos2(inner.right(), text_rect.bottom()),
+        egui::pos2(inner.right(), v_bottom),
     );
     if widgets::v_scrollbar_in(
         ui,

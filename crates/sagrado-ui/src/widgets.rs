@@ -485,16 +485,13 @@ fn scrollbar_in(
     match (skin.get(track_slot), track_img) {
         (Some(tex), Some(img)) => nine_slice(ui.painter(), tex, img, rect, Color32::WHITE),
         _ => {
-            // KDX Standard style: dark track with black border and grey
-            // arrow triangles at both ends.
+            // KDX Standard style: dark sunken track with black border and
+            // grey arrow triangles at both ends.
             let c = theme.colors;
-            ui.painter().rect(
-                rect,
-                0.0,
-                c.primary_background,
-                (1.0, Color32::BLACK),
-                StrokeKind::Inside,
-            );
+            let table = |i: usize, def: Color32| theme.color_table.get(i).copied().unwrap_or(def);
+            let track = table(6, c.primary_dark);
+            ui.painter()
+                .rect(rect, 0.0, track, (1.0, Color32::BLACK), StrokeKind::Inside);
             let arrow_color = if enabled {
                 c.disabled_text
             } else {
@@ -583,31 +580,38 @@ fn scrollbar_in(
                 }
             }
             _ => {
-                // KDX Standard style: grey thumb with black border and grip
-                // lines across the middle.
+                // KDX Standard style: raised grey thumb (light top-left
+                // bevel, dark bottom-right) with grip lines in the middle.
                 let c = theme.colors;
-                ui.painter().rect(
-                    thumb_rect.shrink(1.0),
-                    0.0,
-                    c.primary_dark,
-                    (1.0, Color32::BLACK),
-                    StrokeKind::Inside,
-                );
+                let table =
+                    |i: usize, def: Color32| theme.color_table.get(i).copied().unwrap_or(def);
+                let body = c.primary_background;
+                let hi = table(43, c.primary_light);
+                let sh = table(6, c.primary_dark);
+                let tr = thumb_rect.shrink(1.0);
+                ui.painter()
+                    .rect(tr, 0.0, body, (1.0, Color32::BLACK), StrokeKind::Inside);
+                let inner = tr.shrink(1.0);
+                let p = ui.painter();
+                p.line_segment([inner.left_top(), inner.right_top()], (1.0, hi));
+                p.line_segment([inner.left_top(), inner.left_bottom()], (1.0, hi));
+                p.line_segment([inner.left_bottom(), inner.right_bottom()], (1.0, sh));
+                p.line_segment([inner.right_top(), inner.right_bottom()], (1.0, sh));
                 let mid = thumb_rect.center();
                 for i in -1..=1 {
                     let o = i as f32 * 3.0;
                     let (a, b) = if horizontal {
                         (
-                            egui::pos2(mid.x + o, thumb_rect.top() + 4.0),
-                            egui::pos2(mid.x + o, thumb_rect.bottom() - 4.0),
+                            egui::pos2(mid.x + o, thumb_rect.top() + 5.0),
+                            egui::pos2(mid.x + o, thumb_rect.bottom() - 5.0),
                         )
                     } else {
                         (
-                            egui::pos2(thumb_rect.left() + 4.0, mid.y + o),
-                            egui::pos2(thumb_rect.right() - 4.0, mid.y + o),
+                            egui::pos2(thumb_rect.left() + 5.0, mid.y + o),
+                            egui::pos2(thumb_rect.right() - 5.0, mid.y + o),
                         )
                     };
-                    ui.painter().line_segment([a, b], (1.0, c.disabled_text));
+                    ui.painter().line_segment([a, b], (1.0, hi));
                 }
             }
         }

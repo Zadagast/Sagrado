@@ -346,9 +346,7 @@ impl eframe::App for App {
             if let Some(id) = menu::menu_bar(ui, &theme, &menus, unsaved) {
                 command = Some(id);
             }
-            ui.add_space(2.0);
             tab_event = menu::doc_tabs(ui, &theme, skin_ref, &tabs, current);
-            ui.add_space(2.0);
 
             if self.find.open {
                 if let Some(id) = find::panel(ui, &theme, skin_ref, &mut self.find) {
