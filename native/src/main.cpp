@@ -33,7 +33,30 @@ struct App {
     int hot_item = -1;
     Rect dropdown{};
     int item_h = 18;
+    // Manual drag / resize (SetCapture-based: identical behavior on
+    // Windows and Wine, no reliance on NC hit-test forwarding).
+    int drag_mode = 0; // 0 none, 1 move, 2 resize, 3 thumb, 4 title-boxes
+    POINT drag_origin{};
+    RECT drag_start{};
+    int thumb_grab = 0;
+    // Scrolling.
+    int scroll = 0;      // first visible line
+    int total_lines = 0; // document length
+    int page_lines = 1;
+    Rect sb{}, up1{}, dn1{}, up2{}, dn2{}, thumb{}, track{};
 } g_app;
+
+constexpr int kLineH = kFontHeight + 1;
+
+int max_scroll() {
+    int m = g_app.total_lines - g_app.page_lines;
+    return m > 0 ? m : 0;
+}
+
+void set_scroll(int v) {
+    int m = max_scroll();
+    g_app.scroll = v < 0 ? 0 : (v > m ? m : v);
+}
 
 void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect c = lay.client;
@@ -65,24 +88,61 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     cv.frame({tab.x + 8, tab.y + 7, 10, 10}, kDeep);
     cv.text(tab.x + 24, tab.y + 4, "Untitled", kWhite);
 
-    // Editor area: black, with sample green text.
-    Rect editor{c.x, strip.bottom(), c.w - kScrollbar, c.bottom() - strip.bottom()};
+    // Editor area: black, scrollable sample document.
+    Rect editor{c.x, strip.bottom(), c.w - kScrollbar,
+                c.bottom() - strip.bottom()};
     cv.fill({c.x, strip.bottom(), c.w, c.bottom() - strip.bottom()}, kBlack);
-    const char *lines[] = {
+    static const char *kPoem[] = {
+        "'Twas brillig, and the slithy toves",
+        "Did gyre and gimble in the wabe;",
+        "All mimsy were the borogoves,",
+        "And the mome raths outgrabe.",
+        "",
+        "'Beware the Jabberwock, my son!",
+        "The jaws that bite, the claws that catch!",
+        "Beware the Jubjub bird, and shun",
+        "The frumious Bandersnatch!'",
+        "",
+        "He took his vorpal sword in hand:",
+        "Long time the manxome foe he sought--",
+        "So rested he by the Tumtum tree,",
+        "And stood awhile in thought.",
+        "",
+        "And as in uffish thought he stood,",
+        "The Jabberwock, with eyes of flame,",
+        "Came whiffling through the tulgey wood,",
+        "And burbled as it came!",
+        "",
+        "One, two! One, two! And through and through",
+        "The vorpal blade went snicker-snack!",
+        "He left it dead, and with its head",
+        "He went galumphing back.",
+        "",
+        "'And hast thou slain the Jabberwock?",
+        "Come to my arms, my beamish boy!",
+        "O frabjous day! Callooh! Callay!'",
+        "He chortled in his joy.",
+        "",
         "'Twas brillig, and the slithy toves",
         "Did gyre and gimble in the wabe;",
         "All mimsy were the borogoves,",
         "And the mome raths outgrabe.",
     };
+    g_app.total_lines = int(sizeof(kPoem) / sizeof(kPoem[0]));
+    g_app.page_lines = (editor.h - 8) / kLineH;
+    if (g_app.page_lines < 1) g_app.page_lines = 1;
+    set_scroll(g_app.scroll);
     int y = editor.y + 4;
-    for (const char *ln : lines) {
-        cv.text(editor.x + 4, y, ln, Color{0, 204, 0});
-        y += kFontHeight + 1;
+    for (int i = g_app.scroll;
+         i < g_app.total_lines && y < editor.bottom() - 2; ++i) {
+        cv.text(editor.x + 4, y, kPoem[i], Color{0, 204, 0});
+        y += kLineH;
     }
 
     // Vertical scrollbar, stopping above the grow box.
     Rect sb{c.right() - kScrollbar + 1, editor.y, kScrollbar,
             g_app.lay.grip.y - editor.y};
+    g_app.sb = sb;
     cv.fill(sb, kTrack);
     cv.frame(sb, kBlack);
     // Arrow boxes: a dec+inc pair at each end.
@@ -97,21 +157,35 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
             int w = up ? i : 3 - i;
             cv.hline(cx - w, cx + w + 1, cy - 2 + i, kGlyphGrey);
         }
+        return b;
     };
     int ah = 13;
-    arrow_box(sb.y, ah, true);
-    arrow_box(sb.y + ah - 1, ah, false);
-    arrow_box(sb.bottom() - 2 * ah + 1, ah, true);
-    arrow_box(sb.bottom() - ah, ah, false);
-    // Thumb.
-    Rect thumb{sb.x, sb.y + 2 * ah - 1, sb.w, 40};
+    g_app.up1 = arrow_box(sb.y, ah, true);
+    g_app.dn1 = arrow_box(sb.y + ah - 1, ah, false);
+    g_app.up2 = arrow_box(sb.bottom() - 2 * ah + 1, ah, true);
+    g_app.dn2 = arrow_box(sb.bottom() - ah, ah, false);
+    // Thumb, positioned from the scroll state.
+    Rect track{sb.x, g_app.dn1.bottom() - 1, sb.w,
+               g_app.up2.y - g_app.dn1.bottom() + 2};
+    g_app.track = track;
+    int th = max_scroll() > 0
+                 ? track.h * g_app.page_lines / g_app.total_lines
+                 : track.h;
+    if (th < 20) th = 20;
+    if (th > track.h) th = track.h;
+    int ty = track.y;
+    if (max_scroll() > 0)
+        ty += (track.h - th) * g_app.scroll / max_scroll();
+    Rect thumb{sb.x, ty, sb.w, th};
+    g_app.thumb = thumb;
     cv.fill(thumb, kThumb);
     cv.frame(thumb, kBlack);
     cv.hline(thumb.x + 1, thumb.right() - 1, thumb.y + 1, kThumbHi);
     cv.vline(thumb.x + 1, thumb.y + 1, thumb.bottom() - 1, kThumbHi);
-    for (int i = 0; i < 3; ++i)
-        cv.hline(thumb.x + 4, thumb.right() - 4,
-                 thumb.y + thumb.h / 2 - 3 + i * 3, kBarDark);
+    if (th >= 14)
+        for (int i = 0; i < 3; ++i)
+            cv.hline(thumb.x + 4, thumb.right() - 4,
+                     thumb.y + th / 2 - 3 + i * 3, kBarDark);
 }
 
 int menu_item_count(int m) {
@@ -195,19 +269,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int x = pt.x, y = pt.y;
             const ChromeLayout &lay = g_app.lay;
             if (box_at(x, y) || g_app.open_menu >= 0) return HTCLIENT;
-            if (lay.grip.contains(x, y)) return HTBOTTOMRIGHT;
-            int w = lay.window.w, h = lay.window.h;
-            bool left = x < kBorder, right = x >= w - kBorder;
-            bool top = y < 3, bottom = y >= h - kBorder;
-            if (top && left) return HTTOPLEFT;
-            if (top && right) return HTTOPRIGHT;
-            if (bottom && left) return HTBOTTOMLEFT;
-            if (bottom && right) return HTBOTTOMRIGHT;
-            if (top) return HTTOP;
-            if (bottom) return HTBOTTOM;
-            if (left) return HTLEFT;
-            if (right) return HTRIGHT;
-            if (y < kTitleH) return HTCAPTION;
+            (void)lay;
+            // Everything is handled manually in the client area so drag
+            // and resize behave identically on Windows and Wine.
             return HTCLIENT;
         }
         case WM_LBUTTONDOWN: {
@@ -237,14 +301,75 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int b = box_at(x, y);
             if (b) {
                 g_app.pressed_box = b;
+                g_app.drag_mode = 4;
                 SetCapture(hwnd);
                 InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            // Scrollbar interaction.
+            if (g_app.sb.contains(x, y)) {
+                if (g_app.up1.contains(x, y) || g_app.up2.contains(x, y))
+                    set_scroll(g_app.scroll - 1);
+                else if (g_app.dn1.contains(x, y) || g_app.dn2.contains(x, y))
+                    set_scroll(g_app.scroll + 1);
+                else if (g_app.thumb.contains(x, y)) {
+                    g_app.drag_mode = 3;
+                    g_app.thumb_grab = y - g_app.thumb.y;
+                    SetCapture(hwnd);
+                } else if (y < g_app.thumb.y)
+                    set_scroll(g_app.scroll - g_app.page_lines);
+                else
+                    set_scroll(g_app.scroll + g_app.page_lines);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            // Manual move / resize with SetCapture (Wine-proof).
+            POINT scr{x, y};
+            ClientToScreen(hwnd, &scr);
+            GetWindowRect(hwnd, &g_app.drag_start);
+            g_app.drag_origin = scr;
+            if (g_app.lay.grip.contains(x, y) ||
+                (x >= g_app.lay.window.w - kBorder &&
+                 y >= g_app.lay.window.h - kBorder)) {
+                g_app.drag_mode = 2;
+                SetCapture(hwnd);
+            } else if (y < kTitleH) {
+                g_app.drag_mode = 1;
+                SetCapture(hwnd);
             }
             return 0;
         }
         case WM_MOUSEMOVE: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (g_app.drag_mode == 1 || g_app.drag_mode == 2) {
+                POINT scr{x, y};
+                ClientToScreen(hwnd, &scr);
+                int dx = scr.x - g_app.drag_origin.x;
+                int dy = scr.y - g_app.drag_origin.y;
+                const RECT &s = g_app.drag_start;
+                if (g_app.drag_mode == 1) {
+                    SetWindowPos(hwnd, nullptr, s.left + dx, s.top + dy, 0, 0,
+                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                } else {
+                    int w = (s.right - s.left) + dx;
+                    int h = (s.bottom - s.top) + dy;
+                    if (w < 240) w = 240;
+                    if (h < 160) h = 160;
+                    SetWindowPos(hwnd, nullptr, 0, 0, w, h,
+                                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                return 0;
+            }
+            if (g_app.drag_mode == 3) {
+                int span = g_app.track.h - g_app.thumb.h;
+                if (span > 0 && max_scroll() > 0) {
+                    int ty = y - g_app.thumb_grab - g_app.track.y;
+                    set_scroll((ty * max_scroll() + span / 2) / span);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
             if (g_app.open_menu >= 0) {
-                int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
                 int hot = g_app.dropdown.contains(x, y)
                               ? (y - g_app.dropdown.y - 2) / g_app.item_h
                               : -1;
@@ -255,6 +380,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_MOUSEWHEEL: {
+            set_scroll(g_app.scroll -
+                       GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA * 3);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE && g_app.open_menu >= 0) {
                 g_app.open_menu = -1;
@@ -262,6 +393,14 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_LBUTTONUP: {
+            if (g_app.drag_mode) {
+                int mode = g_app.drag_mode;
+                g_app.drag_mode = 0;
+                if (mode != 4) {
+                    ReleaseCapture();
+                    return 0;
+                }
+            }
             if (g_app.pressed_box) {
                 ReleaseCapture();
                 int b = box_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
