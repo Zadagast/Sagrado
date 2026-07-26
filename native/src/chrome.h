@@ -163,11 +163,13 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     if (frame) {
         cv.nine_slice(*frame, win);
         int tw = cv.text_width(title);
-        // Title text: the theme's Window Focus Label / Window Label entries.
+        // Title text: Primary Label / Primary Disable Label. Verified against
+        // real KDX: bitmap themes leave the Window Label entries at the
+        // default white, yet KDX titles render in the Primary Label color.
         Color tc = focused ? kWhite : kGlyphGrey;
         if (theme->has_colors) {
-            uint32_t v =
-                theme->color(focused ? ColWindowFocusLabel : ColWindowLabel);
+            uint32_t v = theme->color(focused ? ColPrimaryLabel
+                                              : ColPrimaryDisableLabel);
             tc = {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
         }
         cv.text((win.w - tw) / 2, (lay.title_h - kFontHeight) / 2, title, tc);
@@ -312,7 +314,7 @@ inline UiColors ui_colors(const Theme *theme) {
             c(ColColumnHeaderHilite),
             c(ColColumnHeaderHiliteLight),
             c(ColColumnHeaderHiliteDark),
-            c(ColColumnHeaderHiliteLabel)};
+            c(ColPrimaryLabel)};
 }
 
 // A raised bar (menu bar / tab strip base), lit from the top.

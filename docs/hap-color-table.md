@@ -88,6 +88,14 @@ separate table entries.
 
 ## Notes
 
+- **Bitmap themes leave many groups at default values.** Themes authored as
+  art-only (Milk Redux, Aluminum Alloy, WinXP, MacOS Classic, BeOS …) keep
+  the Window/Window Focus and Column Header color groups untouched (Window
+  Label stays default white). Real KDX renders window titles and header
+  labels in **Primary Label (5)** / **Primary Disable Label (7)** — which
+  authors do edit — so renderers should source those labels from the
+  Primary group, not the Window/Column Header label entries.
+
 - The UI list order in AppearanceEdit is not the file order everywhere:
   Progress Frame/Label (126/127) are listed before the Bkgnd trio (123–125),
   and the Slider Bar quad (166–169) is listed before the Indicator quads
