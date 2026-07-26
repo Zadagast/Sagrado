@@ -359,69 +359,7 @@ fn paint_frame(
     if let (Some(tex), Some(img)) = (skin.get(frame_slot), theme.image(frame_slot)) {
         nine_slice(ui.painter(), tex, img, rect, Color32::WHITE);
     } else {
-        let black = Color32::BLACK;
-        let p = ui.painter();
-        let vline = |x: f32, y0: f32, y1: f32, col: Color32| {
-            p.line_segment(
-                [egui::pos2(x + 0.5, y0), egui::pos2(x + 0.5, y1)],
-                (1.0, col),
-            );
-        };
-        let hline = |y: f32, x0: f32, x1: f32, col: Color32| {
-            p.line_segment(
-                [egui::pos2(x0, y + 0.5), egui::pos2(x1, y + 0.5)],
-                (1.0, col),
-            );
-        };
-
-        // Title bar: black top line, bright highlight line, then a vertical
-        // gradient running dark to bright, a shadow line and a black line.
-        let bar = lay.title_bar;
-        hline(bar.top(), bar.left(), bar.right(), black);
-        hline(bar.top() + 1.0, bar.left(), bar.right(), colors.highlight);
-        let grad = Rect::from_min_max(
-            egui::pos2(bar.left(), bar.top() + 2.0),
-            egui::pos2(bar.right(), bar.bottom() - 2.0),
-        );
-        let mut mesh = egui::Mesh::default();
-        mesh.colored_vertex(grad.left_top(), colors.grad_top);
-        mesh.colored_vertex(grad.right_top(), colors.grad_top);
-        mesh.colored_vertex(grad.right_bottom(), colors.grad_bottom);
-        mesh.colored_vertex(grad.left_bottom(), colors.grad_bottom);
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        p.add(egui::Shape::mesh(mesh));
-        hline(bar.bottom() - 2.0, bar.left(), bar.right(), colors.shadow);
-        hline(bar.bottom() - 1.0, bar.left(), bar.right(), black);
-
-        // Side and bottom borders: a raised red ridge — black outline,
-        // bright/body/shadow ramp, black inner outline (lit from top-left).
-        // The outer black outline runs the full window height so the title
-        // bar and borders read as one connected frame.
-        let (t, b, l, r) = (bar.bottom(), rect.bottom(), rect.left(), rect.right());
-        vline(l, rect.top(), b, black);
-        vline(r - 1.0, rect.top(), b, black);
-        // Left: outer black, bright, body x2, shadow, inner black.
-        vline(l, t, b, black);
-        vline(l + 1.0, t, b, colors.highlight);
-        vline(l + 2.0, t, b, colors.body);
-        vline(l + 3.0, t, b, colors.body);
-        vline(l + 4.0, t, b, colors.shadow);
-        vline(l + 5.0, t, b, black);
-        // Right: inner black, bright, body x2, shadow, outer black.
-        vline(r - 6.0, t, b, black);
-        vline(r - 5.0, t, b, colors.highlight);
-        vline(r - 4.0, t, b, colors.body);
-        vline(r - 3.0, t, b, colors.body);
-        vline(r - 2.0, t, b, colors.shadow);
-        vline(r - 1.0, t, b, black);
-        // Bottom: inner black, bright, body x2, shadow, outer black.
-        hline(b - 6.0, l, r, black);
-        hline(b - 5.0, l, r, colors.highlight);
-        hline(b - 4.0, l, r, colors.body);
-        hline(b - 3.0, l, r, colors.body);
-        hline(b - 2.0, l, r, colors.shadow);
-        hline(b - 1.0, l, r, black);
+        paint_standard_frame(ui, rect, lay, colors);
 
         // Hatched drag stripes next to the close box.
         if let Some(hr) = lay.hatch_box {
@@ -429,6 +367,99 @@ fn paint_frame(
             hatch(ui, hr.shrink(3.0), theme.colors.text);
         }
     }
+}
+
+/// The KDX Standard frame, drawn as one solid slab: a red ring (title bar +
+/// borders) between the window's outer black outline and the client hole,
+/// lit from the top-left. The title gradient flows straight into the side
+/// borders; the only interior black is the 1px outline around the client
+/// hole, exactly like the real Haxial chrome.
+fn paint_standard_frame(ui: &Ui, rect: Rect, lay: &ChromeLayout, colors: &ChromeColors) {
+    let black = Color32::BLACK;
+    let p = ui.painter();
+    let client = lay.client;
+    let slab = rect.shrink(1.0);
+
+    // Whole slab in the body color; the client hole is painted over by the
+    // hole outline + content below.
+    p.rect_filled(slab, 0.0, colors.body);
+
+    // Title region: gradient across the full slab width, merging into the
+    // side borders with nothing in between.
+    let grad = Rect::from_min_max(
+        egui::pos2(slab.left(), slab.top() + 1.0),
+        egui::pos2(slab.right(), client.top() - 2.0),
+    );
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(grad.left_top(), colors.grad_top);
+    mesh.colored_vertex(grad.right_top(), colors.grad_top);
+    mesh.colored_vertex(grad.right_bottom(), colors.grad_bottom);
+    mesh.colored_vertex(grad.left_bottom(), colors.grad_bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.add(egui::Shape::mesh(mesh));
+
+    let vline = |x: f32, y0: f32, y1: f32, col: Color32| {
+        p.line_segment(
+            [egui::pos2(x + 0.5, y0), egui::pos2(x + 0.5, y1)],
+            (1.0, col),
+        );
+    };
+    let hline = |y: f32, x0: f32, x1: f32, col: Color32| {
+        p.line_segment(
+            [egui::pos2(x0, y + 0.5), egui::pos2(x1, y + 0.5)],
+            (1.0, col),
+        );
+    };
+
+    // Bright faces (toward the top-left light): slab top edge, slab left
+    // edge, and the inner faces of the right and bottom ridges.
+    hline(slab.top(), slab.left(), slab.right(), colors.highlight);
+    vline(slab.left(), slab.top(), slab.bottom(), colors.highlight);
+    vline(
+        client.right() + 1.0,
+        client.top() - 1.0,
+        client.bottom() + 1.0,
+        colors.highlight,
+    );
+    hline(
+        client.bottom() + 1.0,
+        client.left() - 1.0,
+        client.right() + 2.0,
+        colors.highlight,
+    );
+
+    // Shadow faces (away from the light): inner face of the left ridge,
+    // bottom of the title region, and the slab's right and bottom edges.
+    vline(
+        client.left() - 2.0,
+        client.top() - 2.0,
+        slab.bottom(),
+        colors.shadow,
+    );
+    hline(
+        client.top() - 2.0,
+        client.left() - 2.0,
+        client.right() + 1.0,
+        colors.shadow,
+    );
+    vline(
+        slab.right() - 1.0,
+        client.top() - 2.0,
+        slab.bottom(),
+        colors.shadow,
+    );
+    hline(
+        slab.bottom() - 1.0,
+        slab.left() + 1.0,
+        slab.right(),
+        colors.shadow,
+    );
+
+    // The only black lines: the window's outer outline and the 1px outline
+    // around the client hole.
+    p.rect_stroke(rect, 0.0, (1.0, black), StrokeKind::Inside);
+    p.rect_stroke(client.expand(1.0), 0.0, (1.0, black), StrokeKind::Inside);
 }
 
 /// Grow box art; the Standard red hatched corner box otherwise. Painted
