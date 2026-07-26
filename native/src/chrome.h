@@ -270,10 +270,35 @@ inline void paint_grip(Canvas &cv, Rect g, bool focused,
     }
 }
 
-// A raised grey bar (menu bar / tab strip base).
-inline void raised_bar(Canvas &cv, Rect r) {
-    cv.fill(r, kBarBody);
-    cv.hline(r.x, r.right(), r.y, kBarLight);
-    cv.hline(r.x, r.right(), r.bottom() - 2, kBarDark);
+inline Color from_u32(uint32_t v) {
+    return {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
+}
+
+// Semantic UI colors resolved from the theme's 204-entry color table
+// (AppearanceEdit "Colors" panel order), Standard greys otherwise.
+struct UiColors {
+    Color bar_light, bar_body, bar_dark; // menu/tab bars, dropdowns
+    Color text;                          // bar labels
+    Color hilite, hilite_text;           // menu hilite bar
+    Color editor_bg, editor_fg;          // text box background/foreground
+    Color track, thumb, thumb_hi;        // scrollbar
+};
+
+inline UiColors ui_colors(const Theme *theme) {
+    if (!theme || !theme->has_colors)
+        return {kBarLight, kBarBody,        kBarDark, kWhite,
+                kBody,     kWhite,          kBlack,   Color{0, 204, 0},
+                kTrack,    kThumb,          kThumbHi};
+    auto c = [&](int i) { return from_u32(theme->color(i)); };
+    return {c(1), c(2),  c(3), c(5), c(12), c(13),
+            c(10), c(11), c(3), c(2), c(1)};
+}
+
+// A raised bar (menu bar / tab strip base), lit from the top.
+inline void raised_bar(Canvas &cv, Rect r,
+                       const UiColors &uc = ui_colors(nullptr)) {
+    cv.fill(r, uc.bar_body);
+    cv.hline(r.x, r.right(), r.y, uc.bar_light);
+    cv.hline(r.x, r.right(), r.bottom() - 2, uc.bar_dark);
     cv.hline(r.x, r.right(), r.bottom() - 1, kBlack);
 }

@@ -104,16 +104,19 @@ void set_scroll(int v) {
 
 void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect c = lay.client;
+    const Theme *theme = active_theme();
+    UiColors uc = ui_colors(theme);
 
     // Menu bar.
     Rect menu{c.x, c.y, c.w, kMenuH};
-    raised_bar(cv, menu);
+    raised_bar(cv, menu, uc);
     int x = menu.x + 8;
     for (int i = 0; i < 5; ++i) {
         int tw = cv.text_width(kMenus[i]);
         g_app.menu_rects[i] = {x, menu.y, tw + 12, kMenuH - 2};
-        if (g_app.open_menu == i) cv.fill(g_app.menu_rects[i], kBody);
-        cv.text(x + 6, menu.y + 2, kMenus[i], kWhite);
+        if (g_app.open_menu == i) cv.fill(g_app.menu_rects[i], uc.hilite);
+        cv.text(x + 6, menu.y + 2, kMenus[i],
+                g_app.open_menu == i ? uc.hilite_text : uc.text);
         x += tw + 12;
     }
     // Save-state indicator triangle at the right of the menu bar.
@@ -124,7 +127,7 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     // Tab strip with one active red tab (measured: 33px strip, tab 4px
     // below its top, 24px tall).
     Rect strip{c.x, menu.bottom(), c.w, kTabH};
-    raised_bar(cv, strip);
+    raised_bar(cv, strip, uc);
     Rect tab{strip.x + 4, strip.y + 4, 108, 24};
     bevel_box(cv, tab, false);
     // Save-state square icon, then the document name.
@@ -135,7 +138,8 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     // Editor area: black, scrollable sample document.
     Rect editor{c.x, strip.bottom(), c.w - kScrollbar,
                 c.bottom() - strip.bottom()};
-    cv.fill({c.x, strip.bottom(), c.w, c.bottom() - strip.bottom()}, kBlack);
+    cv.fill({c.x, strip.bottom(), c.w, c.bottom() - strip.bottom()},
+            uc.editor_bg);
     static const char *kPoem[] = {
         "'Twas brillig, and the slithy toves",
         "Did gyre and gimble in the wabe;",
@@ -180,7 +184,7 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     for (int i = g_app.scroll;
          i < g_app.total_lines && y + kFontHeight <= editor.bottom() - 2;
          ++i) {
-        cv.text(editor.x + 4, y, kPoem[i], Color{0, 204, 0});
+        cv.text(editor.x + 4, y, kPoem[i], uc.editor_fg);
         y += kLineH;
     }
 
@@ -188,19 +192,19 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect sb{c.right() - kScrollbar + 1, editor.y, kScrollbar,
             g_app.lay.grip.y - editor.y};
     g_app.sb = sb;
-    cv.fill(sb, kTrack);
+    cv.fill(sb, uc.track);
     cv.frame(sb, kBlack);
     // Arrow boxes: a dec+inc pair at each end.
     auto arrow_box = [&](int y0, int h, bool up) {
         Rect b{sb.x, y0, sb.w, h};
-        cv.fill(b, kBarBody);
+        cv.fill(b, uc.thumb);
         cv.frame(b, kBlack);
-        cv.hline(b.x + 1, b.right() - 1, b.y + 1, kThumbHi);
-        cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, kThumbHi);
+        cv.hline(b.x + 1, b.right() - 1, b.y + 1, uc.thumb_hi);
+        cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, uc.thumb_hi);
         int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
         for (int i = 0; i < 4; ++i) {
             int w = up ? i : 3 - i;
-            cv.hline(cx - w, cx + w + 1, cy - 2 + i, kGlyphGrey);
+            cv.hline(cx - w, cx + w + 1, cy - 2 + i, uc.text);
         }
         return b;
     };
@@ -223,14 +227,22 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
         ty += (track.h - th) * g_app.scroll / max_scroll();
     Rect thumb{sb.x, ty, sb.w, th};
     g_app.thumb = thumb;
-    cv.fill(thumb, kThumb);
-    cv.frame(thumb, kBlack);
-    cv.hline(thumb.x + 1, thumb.right() - 1, thumb.y + 1, kThumbHi);
-    cv.vline(thumb.x + 1, thumb.y + 1, thumb.bottom() - 1, kThumbHi);
-    if (th >= 14)
-        for (int i = 0; i < 3; ++i)
-            cv.hline(thumb.x + 4, thumb.right() - 4,
-                     thumb.y + th / 2 - 3 + i * 3, kBarDark);
+    // Thumb: the theme's scroll indicator art when present, primitive
+    // otherwise.
+    const ThemeImage *ind =
+        theme ? theme->image(SlotVScrollIndicatorNormal) : nullptr;
+    if (ind) {
+        cv.nine_slice(*ind, thumb);
+    } else {
+        cv.fill(thumb, uc.thumb);
+        cv.frame(thumb, kBlack);
+        cv.hline(thumb.x + 1, thumb.right() - 1, thumb.y + 1, uc.thumb_hi);
+        cv.vline(thumb.x + 1, thumb.y + 1, thumb.bottom() - 1, uc.thumb_hi);
+        if (th >= 14)
+            for (int i = 0; i < 3; ++i)
+                cv.hline(thumb.x + 4, thumb.right() - 4,
+                         thumb.y + th / 2 - 3 + i * 3, uc.bar_dark);
+    }
 }
 
 int menu_item_count(int m) {
@@ -259,18 +271,21 @@ void paint_dropdown(Canvas &cv) {
     Rect r{g_app.menu_rects[m].x, g_app.menu_rects[m].bottom() + 2, wmax + 24,
            n * g_app.item_h + 4};
     g_app.dropdown = r;
-    cv.fill(r, kBarBody);
+    UiColors uc = ui_colors(active_theme());
+    cv.fill(r, uc.bar_body);
     cv.frame(r, kBlack);
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kBarLight);
-    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, kBarLight);
-    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, kBarDark);
-    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, kBarDark);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, uc.bar_light);
+    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, uc.bar_light);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, uc.bar_dark);
+    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, uc.bar_dark);
     for (int i = 0; i < n; ++i) {
         Rect item{r.x + 2, r.y + 2 + i * g_app.item_h, r.w - 4, g_app.item_h};
-        if (i == g_app.hot_item) cv.fill(item, kBody);
+        bool hot = i == g_app.hot_item;
+        if (hot) cv.fill(item, uc.hilite);
+        Color fg = hot ? uc.hilite_text : uc.text;
         if (m == 4 && i == g_app.theme_index)
-            cv.text(item.x + 2, item.y + 1, ">", kWhite);
-        cv.text(item.x + 10, item.y + 1, menu_item_text(m, i), kWhite);
+            cv.text(item.x + 2, item.y + 1, ">", fg);
+        cv.text(item.x + 10, item.y + 1, menu_item_text(m, i), fg);
     }
 }
 
