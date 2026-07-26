@@ -164,7 +164,7 @@ pub fn window_frame(
                 ui.id().with("title_drag"),
                 Sense::click_and_drag(),
             );
-            if drag_resp.drag_started() {
+            if drag_resp.drag_started_by(egui::PointerButton::Primary) {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
 

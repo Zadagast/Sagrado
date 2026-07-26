@@ -36,6 +36,15 @@ impl SkinTextures {
     }
 }
 
+/// Tiles thinner than this repeat imperceptibly, so we stretch instead of
+/// emitting one quad per pixel.
+const MIN_TILE_PX: f32 = 3.0;
+/// Never emit more than this many tiles along one axis; beyond it, stretch.
+/// A solid or near-solid material (the common case for window backgrounds and
+/// title bars, whose center strip is ~1px) then costs a single quad instead of
+/// hundreds of thousands.
+const MAX_REPEATS: f32 = 256.0;
+
 /// Repeat the source region `src` (in texel coordinates) across `dst`,
 /// clipping partial tiles — the Appearance Engine repeats rather than
 /// stretches the material between caps.
@@ -56,6 +65,18 @@ fn tile(
         egui::pos2(src.left() / tex_size.x, src.top() / tex_size.y),
         egui::pos2(src.right() / tex_size.x, src.bottom() / tex_size.y),
     );
+    // Fall back to stretching an axis when tiling it would be pathological
+    // (tile ~1px, or so many repeats they can't be told apart from a stretch).
+    let step_x = if tw < MIN_TILE_PX || dst.width() / tw > MAX_REPEATS {
+        dst.width()
+    } else {
+        tw
+    };
+    let step_y = if th < MIN_TILE_PX || dst.height() / th > MAX_REPEATS {
+        dst.height()
+    } else {
+        th
+    };
     let p = painter.with_clip_rect(dst.intersect(painter.clip_rect()));
     let mut y = dst.top();
     while y < dst.bottom() {
@@ -63,13 +84,13 @@ fn tile(
         while x < dst.right() {
             p.image(
                 tex.id(),
-                Rect::from_min_size(egui::pos2(x, y), Vec2::new(tw, th)),
+                Rect::from_min_size(egui::pos2(x, y), Vec2::new(step_x, step_y)),
                 uv,
                 tint,
             );
-            x += tw;
+            x += step_x;
         }
-        y += th;
+        y += step_y;
     }
 }
 
