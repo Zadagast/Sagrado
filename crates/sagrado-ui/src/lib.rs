@@ -3,6 +3,7 @@
 //! every Sagrado application so they render with the same appearance engine.
 
 pub mod chrome;
+pub mod fonts;
 pub mod menu;
 pub mod paint;
 pub mod widgets;

@@ -1,8 +1,9 @@
 //! Menu bar and document tab bar, drawn in the KDX style from theme colors.
 
-use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Ui, Vec2};
+use eframe::egui::{self, Align2, Rect, Sense, Ui, Vec2};
 use sagrado_theme::Theme;
 
+use crate::fonts;
 use crate::paint::SkinTextures;
 
 /// One entry in a pull-down menu.
@@ -64,8 +65,8 @@ impl Menu {
 /// frame. Menu titles highlight on hover and open a themed pull-down.
 pub fn menu_bar(ui: &mut Ui, theme: &Theme, menus: &[Menu]) -> Option<String> {
     let c = theme.colors;
-    let font = FontId::proportional(14.0);
-    let bar_h = 24.0;
+    let font = fonts::ui_font();
+    let bar_h = 26.0;
     let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), bar_h), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, c.primary_background);
 
@@ -152,8 +153,8 @@ fn show_dropdown(
     items: &[Item],
 ) -> DropdownResult {
     let c = theme.colors;
-    let font = FontId::proportional(13.0);
-    let row_h = 20.0;
+    let font = fonts::ui_font();
+    let row_h = 22.0;
     let mut chosen = None;
     let width = items
         .iter()
@@ -277,8 +278,8 @@ pub fn doc_tabs(
     selected: usize,
 ) -> Option<TabEvent> {
     let c = theme.colors;
-    let font = FontId::proportional(13.0);
-    let tab_h = 26.0;
+    let font = fonts::ui_font();
+    let tab_h = 30.0;
     let mut event = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -288,54 +289,39 @@ pub fn doc_tabs(
                 .layout_no_wrap(name.clone(), font.clone(), c.text)
                 .size()
                 .x;
-            let w = text_w + 40.0;
+            let w = text_w + 44.0;
             let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, tab_h), Sense::click());
             let active = i == selected;
-            let bg = if active { c.selection } else { c.primary_light };
-            ui.painter().rect(
-                rect,
-                2.0,
-                bg,
-                (1.0, c.primary_dark),
-                egui::StrokeKind::Inside,
-            );
+            let p = ui.painter();
+            let bg = if active {
+                c.selection
+            } else {
+                c.primary_background
+            };
+            p.rect_filled(rect, 0.0, bg);
+            // Raised bevel: light on top/left, dark on bottom/right.
+            let (tl, br) = (c.primary_light, c.primary_dark);
+            p.line_segment([rect.left_top(), rect.right_top()], (2.0, tl));
+            p.line_segment([rect.left_top(), rect.left_bottom()], (2.0, tl));
+            p.line_segment([rect.left_bottom(), rect.right_bottom()], (2.0, br));
+            p.line_segment([rect.right_top(), rect.right_bottom()], (2.0, br));
             let fg = if active { c.selection_text } else { c.text };
             // Document glyph.
-            ui.painter().text(
+            p.text(
                 egui::pos2(rect.left() + 8.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 "▤",
-                FontId::proportional(12.0),
+                font.clone(),
                 fg,
             );
-            ui.painter().text(
-                egui::pos2(rect.left() + 22.0, rect.center().y),
+            p.text(
+                egui::pos2(rect.left() + 26.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 name,
                 font.clone(),
                 fg,
             );
-            // Close affordance.
-            let close_rect = Rect::from_center_size(
-                egui::pos2(rect.right() - 9.0, rect.center().y),
-                Vec2::splat(14.0),
-            );
-            let close_resp = ui.interact(close_rect, ui.id().with(("tabclose", i)), Sense::click());
-            if close_resp.hovered() {
-                ui.painter().rect_filled(close_rect, 2.0, c.alert);
-            }
-            ui.painter().text(
-                close_rect.center(),
-                Align2::CENTER_CENTER,
-                "✕",
-                FontId::proportional(10.0),
-                if close_resp.hovered() {
-                    Color32::WHITE
-                } else {
-                    fg
-                },
-            );
-            if close_resp.clicked() || resp.middle_clicked() {
+            if resp.middle_clicked() {
                 event = Some(TabEvent::Close(i));
             } else if resp.clicked() {
                 event = Some(TabEvent::Select(i));

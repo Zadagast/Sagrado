@@ -90,14 +90,20 @@ struct App {
 }
 
 impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        sagrado_ui::fonts::install(&cc.egui_ctx);
         let mut themes = load_appearances();
         if themes.is_empty() {
             themes.push(Theme::new("Built-in"));
         }
+        // Default to Haxial's own built-in appearance when present.
+        let current_theme = themes
+            .iter()
+            .position(|t| t.name == "Standard")
+            .unwrap_or(0);
         Self {
             themes,
-            current_theme: 0,
+            current_theme,
             skin: paint::SkinTextures::default(),
             docs: vec![Document::sample()],
             current: 0,

@@ -1,6 +1,6 @@
 //! Skinned widgets drawn entirely from theme textures and colors.
 
-use eframe::egui::{self, Align2, Color32, FontId, Rect, Response, Sense, StrokeKind, Ui, Vec2};
+use eframe::egui::{self, Align2, Color32, Rect, Response, Sense, StrokeKind, Ui, Vec2};
 use sagrado_theme::{Slot, Theme};
 
 use crate::paint::{natural, nine_slice, SkinTextures};
@@ -54,7 +54,7 @@ pub fn push_button(
     enabled: bool,
     default: bool,
 ) -> Response {
-    let font = FontId::proportional(13.0);
+    let font = crate::fonts::ui_font();
     let galley_width = ui
         .painter()
         .layout_no_wrap(text.to_owned(), font.clone(), theme.colors.text)
@@ -160,7 +160,7 @@ fn toggle_button(
     ticked: (Slot, Slot, Slot),
     round: bool,
 ) -> Response {
-    let font = FontId::proportional(13.0);
+    let font = crate::fonts::ui_font();
     let text_width = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font.clone(), theme.colors.text)
@@ -212,7 +212,7 @@ fn toggle_button(
                         box_rect.center(),
                         Align2::CENTER_CENTER,
                         "✕",
-                        FontId::proportional(11.0),
+                        crate::fonts::ui_font(),
                         c.text,
                     );
                 }
@@ -497,7 +497,7 @@ pub fn popup_button(
     width: f32,
     enabled: bool,
 ) -> Response {
-    let font = FontId::proportional(13.0);
+    let font = crate::fonts::ui_font();
     let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::click());
     let popup_id = resp.id.with("menu");
     let open = ui.memory(|m| m.is_popup_open(popup_id));

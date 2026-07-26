@@ -1,6 +1,6 @@
 //! The themed multi-line text editing area.
 
-use eframe::egui::{self, text::CCursor, text_selection::CCursorRange, Color32, FontId, Ui};
+use eframe::egui::{self, text::CCursor, text_selection::CCursorRange, Color32, Ui};
 use sagrado_theme::Theme;
 
 use crate::document::Document;
@@ -36,6 +36,12 @@ pub fn editor(
     style.visuals.override_text_color = Some(c.text_box_foreground);
     style.visuals.selection.bg_fill = c.selection;
     style.visuals.selection.stroke = (1.0, c.selection_text).into();
+    // Classic solid scrollbar in theme colors instead of egui's floating bar.
+    style.spacing.scroll = egui::style::ScrollStyle::solid();
+    style.spacing.scroll.bar_width = 16.0;
+    style.visuals.widgets.inactive.bg_fill = c.primary_background;
+    style.visuals.widgets.hovered.bg_fill = c.primary_light;
+    style.visuals.widgets.active.bg_fill = c.primary_light;
     ui.set_style(style);
 
     let frame = egui::Frame::new()
@@ -62,7 +68,7 @@ pub fn editor(
                 };
                 let output = egui::TextEdit::multiline(&mut doc.text)
                     .id(text_edit_id)
-                    .font(FontId::monospace(14.0))
+                    .font(sagrado_ui::fonts::mono_font())
                     .desired_width(desired_width)
                     .desired_rows(20)
                     .lock_focus(true)

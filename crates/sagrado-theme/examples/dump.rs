@@ -7,6 +7,11 @@ fn main() {
     let outdir = args.next();
     let data = std::fs::read(&path).unwrap();
     let theme = sagrado_theme::hap::parse(&data, "dump").unwrap();
+    let c = theme.colors;
+    println!(
+        "colors: primary_bg={:?} text={:?} textbox_bg={:?} selection={:?}",
+        c.primary_background, c.text, c.text_box_background, c.selection
+    );
     let mut indices: Vec<usize> = theme.slot_indices().collect();
     indices.sort_unstable();
     for idx in indices {

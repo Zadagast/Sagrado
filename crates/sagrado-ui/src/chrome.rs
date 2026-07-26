@@ -4,9 +4,7 @@
 //! top thickness is the title bar); the title-bar buttons carry their own
 //! offsets in their positions, anchored from the window edges.
 
-use eframe::egui::{
-    self, Align2, Color32, CursorIcon, FontId, Rect, Sense, Ui, Vec2, ViewportCommand,
-};
+use eframe::egui::{self, Align2, Color32, CursorIcon, Rect, Sense, Ui, Vec2, ViewportCommand};
 use sagrado_theme::{Slot, Theme};
 
 use crate::paint::{natural_at, nine_slice, SkinTextures};
@@ -151,7 +149,7 @@ pub fn window_frame(
                 text_area.center(),
                 Align2::CENTER_CENTER,
                 title,
-                FontId::proportional(13.0),
+                crate::fonts::ui_font(),
                 title_color,
             );
 
@@ -225,7 +223,7 @@ fn fallback_chrome(ui: &mut Ui, theme: &Theme, title: &str, rect: Rect) {
         title_bar.center(),
         Align2::CENTER_CENTER,
         title,
-        FontId::proportional(13.0),
+        crate::fonts::ui_font(),
         c.selection_text,
     );
 }
