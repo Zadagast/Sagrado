@@ -355,15 +355,40 @@ impl eframe::App for App {
                 }
             }
 
-            // Editor fills the remaining space.
-            let caret = editor::editor(ui, &theme, &mut self.docs[current], pending);
+            // Editor fills the remaining space, leaving a bottom strip for the
+            // status line when there's a message to show.
+            let avail = ui.available_rect_before_wrap();
+            let status_h = if self.status.is_empty() { 0.0 } else { 20.0 };
+            let editor_rect = egui::Rect::from_min_max(
+                avail.min,
+                egui::pos2(avail.right(), avail.bottom() - status_h),
+            );
+            let mut editor_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(editor_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            let caret = editor::editor(
+                &mut editor_ui,
+                &theme,
+                skin_ref,
+                &mut self.docs[current],
+                pending,
+            );
             self.caret = caret;
 
             // Status line.
-            if !self.status.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.colored_label(colors.disabled_text, &self.status);
-                });
+            if status_h > 0.0 {
+                let status_rect = egui::Rect::from_min_max(
+                    egui::pos2(avail.left() + 4.0, avail.bottom() - status_h),
+                    avail.max,
+                );
+                let mut status_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(status_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                status_ui.colored_label(colors.disabled_text, &self.status);
             }
         });
 

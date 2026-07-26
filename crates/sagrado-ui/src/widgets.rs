@@ -261,7 +261,10 @@ pub fn v_scrollbar(
     visible: f32,
     enabled: bool,
 ) -> Response {
-    scrollbar(ui, theme, skin, value, length, visible, enabled, false)
+    let thickness = scrollbar_thickness(theme, false);
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(thickness, length), Sense::click_and_drag());
+    scrollbar_in(ui, theme, skin, rect, resp, value, visible, enabled, false)
 }
 
 /// Classic horizontal scroll bar; see [`v_scrollbar`].
@@ -274,16 +277,73 @@ pub fn h_scrollbar(
     visible: f32,
     enabled: bool,
 ) -> Response {
-    scrollbar(ui, theme, skin, value, length, visible, enabled, true)
+    let thickness = scrollbar_thickness(theme, true);
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(length, thickness), Sense::click_and_drag());
+    scrollbar_in(ui, theme, skin, rect, resp, value, visible, enabled, true)
 }
 
+/// The thickness (16 px in original themes) of a scroll bar, taken from its
+/// track art when present.
+pub fn scrollbar_thickness(theme: &Theme, horizontal: bool) -> f32 {
+    let slot = if horizontal {
+        Slot::HScrollSingleArrows
+    } else {
+        Slot::VScrollSingleArrows
+    };
+    theme
+        .image(slot)
+        .map(|img| {
+            let [w, h] = img.size();
+            if horizontal {
+                h as f32
+            } else {
+                w as f32
+            }
+        })
+        .unwrap_or(16.0)
+}
+
+/// Draw a scroll bar occupying an explicit `rect` (with its `resp` already
+/// obtained), so callers such as the text editor can lay the KDX bar into a
+/// reserved gutter. Returns the response.
 #[allow(clippy::too_many_arguments)]
-fn scrollbar(
+pub fn v_scrollbar_in(
     ui: &mut Ui,
     theme: &Theme,
     skin: &SkinTextures,
+    rect: Rect,
     value: &mut f32,
-    length: f32,
+    visible: f32,
+    enabled: bool,
+) -> Response {
+    let resp = ui.interact(rect, ui.id().with("v_scroll_in"), Sense::click_and_drag());
+    scrollbar_in(ui, theme, skin, rect, resp, value, visible, enabled, false)
+}
+
+/// Horizontal counterpart of [`v_scrollbar_in`].
+#[allow(clippy::too_many_arguments)]
+pub fn h_scrollbar_in(
+    ui: &mut Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    rect: Rect,
+    value: &mut f32,
+    visible: f32,
+    enabled: bool,
+) -> Response {
+    let resp = ui.interact(rect, ui.id().with("h_scroll_in"), Sense::click_and_drag());
+    scrollbar_in(ui, theme, skin, rect, resp, value, visible, enabled, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scrollbar_in(
+    ui: &mut Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    rect: Rect,
+    mut resp: Response,
+    value: &mut f32,
     visible: f32,
     enabled: bool,
     horizontal: bool,
@@ -323,13 +383,6 @@ fn scrollbar(
         }
         None => (16.0, 16.0, 16.0),
     };
-
-    let size = if horizontal {
-        Vec2::new(length, thickness)
-    } else {
-        Vec2::new(thickness, length)
-    };
-    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
     let axis = |p: egui::Pos2| if horizontal { p.x } else { p.y };
     let span_min = axis(rect.min) + arrow_a;
