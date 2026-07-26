@@ -33,11 +33,7 @@ struct App {
     int hot_item = -1;
     Rect dropdown{};
     int item_h = 18;
-    // Manual drag / resize (SetCapture-based: identical behavior on
-    // Windows and Wine, no reliance on NC hit-test forwarding).
-    int drag_mode = 0; // 0 none, 1 move, 2 resize, 3 thumb, 4 title-boxes
-    POINT drag_origin{};
-    RECT drag_start{};
+    int drag_mode = 0; // 0 none, 3 thumb drag, 4 title boxes
     int thumb_grab = 0;
     // Scrolling.
     int scroll = 0;      // first visible line
@@ -134,7 +130,8 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     set_scroll(g_app.scroll);
     int y = editor.y + 4;
     for (int i = g_app.scroll;
-         i < g_app.total_lines && y < editor.bottom() - 2; ++i) {
+         i < g_app.total_lines && y + kFontHeight <= editor.bottom() - 2;
+         ++i) {
         cv.text(editor.x + 4, y, kPoem[i], Color{0, 204, 0});
         y += kLineH;
     }
@@ -232,7 +229,7 @@ void repaint(HWND hwnd) {
     paint_chrome(cv, g_app.lay, "TE: Untitled", g_app.focused, g_app.hot_box,
                  g_app.pressed_box);
     paint_content(cv, g_app.lay);
-    paint_grip(cv, g_app.lay.grip);
+    paint_grip(cv, g_app.lay.grip, g_app.focused);
     paint_dropdown(cv);
 }
 
@@ -323,43 +320,21 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
-            // Manual move / resize with SetCapture (Wine-proof).
-            POINT scr{x, y};
-            ClientToScreen(hwnd, &scr);
-            GetWindowRect(hwnd, &g_app.drag_start);
-            g_app.drag_origin = scr;
+            // Native move / resize: hand off to Windows' own modal
+            // move/size loop (what DefWindowProc runs for SC_MOVE/SC_SIZE).
             if (g_app.lay.grip.contains(x, y) ||
                 (x >= g_app.lay.window.w - kBorder &&
                  y >= g_app.lay.window.h - kBorder)) {
-                g_app.drag_mode = 2;
-                SetCapture(hwnd);
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_SIZE + 8 /*bottomright*/,
+                            lp);
             } else if (y < kTitleH) {
-                g_app.drag_mode = 1;
-                SetCapture(hwnd);
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2 /*via mouse*/,
+                            lp);
             }
             return 0;
         }
         case WM_MOUSEMOVE: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g_app.drag_mode == 1 || g_app.drag_mode == 2) {
-                POINT scr{x, y};
-                ClientToScreen(hwnd, &scr);
-                int dx = scr.x - g_app.drag_origin.x;
-                int dy = scr.y - g_app.drag_origin.y;
-                const RECT &s = g_app.drag_start;
-                if (g_app.drag_mode == 1) {
-                    SetWindowPos(hwnd, nullptr, s.left + dx, s.top + dy, 0, 0,
-                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                } else {
-                    int w = (s.right - s.left) + dx;
-                    int h = (s.bottom - s.top) + dy;
-                    if (w < 240) w = 240;
-                    if (h < 160) h = 160;
-                    SetWindowPos(hwnd, nullptr, 0, 0, w, h,
-                                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-                }
-                return 0;
-            }
             if (g_app.drag_mode == 3) {
                 int span = g_app.track.h - g_app.thumb.h;
                 if (span > 0 && max_scroll() > 0) {
@@ -420,6 +395,23 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_app.focused = LOWORD(wp) != WA_INACTIVE;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
+        case WM_ACTIVATEAPP:
+            g_app.focused = wp != FALSE;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+            g_app.focused = msg == WM_SETFOCUS;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_TIMER: {
+            bool f = GetForegroundWindow() == hwnd;
+            if (f != g_app.focused) {
+                g_app.focused = f;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
         case WM_SIZE:
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -450,14 +442,17 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     wc.lpszClassName = "SagradoWindow";
     RegisterClassA(&wc);
 
-    // WS_THICKFRAME + WM_NCCALCSIZE=0 gives native move/resize/minimize with
-    // an entirely self-drawn frame.
+    // Plain popup: no WS_CAPTION/WS_THICKFRAME, so no window manager under
+    // Wine adds its own decorations. Move/resize are handled manually.
     HWND hwnd = CreateWindowExA(
         0, "SagradoWindow", "Sagrado TextEdit",
-        WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+        WS_POPUP | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 760, 520, nullptr, nullptr, hinst,
         nullptr);
     ShowWindow(hwnd, show);
+    // Focus watchdog: some window managers (Wine/X11) don't deliver
+    // WM_ACTIVATE reliably to popup windows, so poll the foreground state.
+    SetTimer(hwnd, 1, 250, nullptr);
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0) {

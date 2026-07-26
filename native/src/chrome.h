@@ -10,10 +10,26 @@ constexpr Color kWhite{255, 255, 255};
 constexpr Color kBright{204, 0, 0};  // #CC0000
 constexpr Color kBody{136, 0, 0};    // #880000
 constexpr Color kDeep{68, 0, 0};     // #440000
-// The exact title gradient measured off the real window, rows 2..19.
+// The exact title gradients measured off the real window, rows 2..19.
 constexpr uint8_t kTitleGrad[18] = {50,  61,  72,  82,  93,  104,
                                     114, 125, 136, 139, 146, 153,
                                     160, 167, 174, 181, 188, 195};
+// Unfocused, the whole chrome goes greyscale (measured).
+constexpr uint8_t kTitleGradGrey[18] = {12, 15, 18, 20, 23,  26,
+                                        28, 31, 34, 39, 52,  65,
+                                        78, 91, 104, 117, 130, 143};
+
+constexpr Color kGreyBright{85, 85, 85};
+constexpr Color kGreyBody{34, 34, 34};
+constexpr Color kGreyDeep{17, 17, 17};
+
+struct ChromeColors {
+    Color bright, body, deep;
+};
+inline ChromeColors chrome_colors(bool focused) {
+    return focused ? ChromeColors{kBright, kBody, kDeep}
+                   : ChromeColors{kGreyBright, kGreyBody, kGreyDeep};
+}
 
 // Greys used by the menu/tab bars and scrollbars.
 constexpr Color kBarLight{102, 102, 102}; // #666666
@@ -55,11 +71,12 @@ inline ChromeLayout chrome_layout(int w, int h) {
 }
 
 // A Standard title-bar box: black border, red fill, bright/shadow bevel.
-inline void bevel_box(Canvas &cv, Rect r, bool pressed) {
-    cv.fill(r, pressed ? kDeep : kBody);
+inline void bevel_box(Canvas &cv, Rect r, bool pressed,
+                      ChromeColors cc = chrome_colors(true)) {
+    cv.fill(r, pressed ? cc.deep : cc.body);
     cv.frame(r, kBlack);
-    Color tl = pressed ? kDeep : kBright;
-    Color br = pressed ? kBright : kDeep;
+    Color tl = pressed ? cc.deep : cc.bright;
+    Color br = pressed ? cc.bright : cc.deep;
     cv.hline(r.x + 1, r.right() - 1, r.y + 1, tl);
     cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, tl);
     cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, br);
@@ -83,37 +100,40 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     Rect client = lay.client;
     Rect slab = {1, 1, win.w - 2, win.h - 2};
 
+    // Unfocused, the whole chrome goes greyscale like the real thing.
+    ChromeColors cc = chrome_colors(focused);
+
     // Slab body, then the title gradient flowing into the side borders.
-    cv.fill(slab, kBody);
+    cv.fill(slab, cc.body);
     for (int i = 0; i < 18; ++i) {
-        uint8_t v = focused ? kTitleGrad[i] : uint8_t(kTitleGrad[i] / 3);
-        cv.hline(slab.x, slab.right(), 2 + i, Color{v, 0, 0});
+        uint8_t v = focused ? kTitleGrad[i] : kTitleGradGrey[i];
+        cv.hline(slab.x, slab.right(), 2 + i,
+                 focused ? Color{v, 0, 0} : Color{v, v, v});
     }
-    cv.hline(slab.x, slab.right(), kTitleH - 2, kDeep);
+    cv.hline(slab.x, slab.right(), kTitleH - 2, cc.deep);
 
     // Bright faces (light from the top-left).
-    cv.hline(slab.x, slab.right(), slab.y, kBright);
-    cv.vline(slab.x, slab.y, slab.bottom(), kBright);
-    cv.vline(client.right() + 1, client.y - 1, client.bottom() + 1, kBright);
-    cv.hline(client.x - 1, client.right() + 2, client.bottom() + 1, kBright);
+    cv.hline(slab.x, slab.right(), slab.y, cc.bright);
+    cv.vline(slab.x, slab.y, slab.bottom(), cc.bright);
+    cv.vline(client.right() + 1, client.y - 1, client.bottom() + 1, cc.bright);
+    cv.hline(client.x - 1, client.right() + 2, client.bottom() + 1, cc.bright);
 
     // Shadow faces.
-    cv.vline(client.x - 2, client.y - 2, slab.bottom(), kDeep);
-    cv.hline(client.x - 2, client.right() + 1, client.y - 2, kDeep);
-    cv.vline(slab.right() - 1, client.y - 2, slab.bottom(), kDeep);
-    cv.hline(slab.x + 1, slab.right(), slab.bottom() - 1, kDeep);
+    cv.vline(client.x - 2, client.y - 2, slab.bottom(), cc.deep);
+    cv.hline(client.x - 2, client.right() + 1, client.y - 2, cc.deep);
+    cv.vline(slab.right() - 1, client.y - 2, slab.bottom(), cc.deep);
+    cv.hline(slab.x + 1, slab.right(), slab.bottom() - 1, cc.deep);
 
     // The only interior black: the client-hole outline. Plus the outer edge.
     cv.frame({client.x - 1, client.y - 1, client.w + 2, client.h + 2}, kBlack);
     cv.frame(win, kBlack);
 
-    // Title, centred, in the KDX pixel font.
+    // Title, centred, in the KDX pixel font (stays white, like the real).
     int tw = cv.text_width(title);
-    cv.text((win.w - tw) / 2, (kTitleH - kFontHeight) / 2, title,
-            focused ? kWhite : kGlyphGrey);
+    cv.text((win.w - tw) / 2, (kTitleH - kFontHeight) / 2, title, kWhite);
 
     // Title-bar boxes: X, hatch drag stripes, + and -.
-    bevel_box(cv, lay.close_box, pressed_box == 1);
+    bevel_box(cv, lay.close_box, pressed_box == 1, cc);
     {
         Rect r = lay.close_box;
         for (int i = 0; i < 6; ++i) {
@@ -123,34 +143,35 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
             cv.put(r.x + 5 + i, r.y + 9 - i, pack(kWhite));
         }
     }
-    bevel_box(cv, lay.hatch_box, false);
+    bevel_box(cv, lay.hatch_box, false, cc);
     diagonal_hatch(cv, {lay.hatch_box.x + 3, lay.hatch_box.y + 3,
                         lay.hatch_box.w - 6, lay.hatch_box.h - 6},
                    kWhite);
-    bevel_box(cv, lay.max_box, pressed_box == 3);
+    bevel_box(cv, lay.max_box, pressed_box == 3, cc);
     cv.fill({lay.max_box.x + 2, lay.max_box.y + 6, 10, 3}, kWhite);
     cv.fill({lay.max_box.x + 6, lay.max_box.y + 2, 3, 10}, kWhite);
-    bevel_box(cv, lay.min_box, pressed_box == 4);
+    bevel_box(cv, lay.min_box, pressed_box == 4, cc);
     cv.fill({lay.min_box.x + 2, lay.min_box.y + 6, 10, 3}, kWhite);
 
     (void)hot_box;
 }
 
 // The lower-right grow box: a red plate merging into the frame corner.
-inline void paint_grip(Canvas &cv, Rect g) {
-    cv.fill(g, kBody);
+inline void paint_grip(Canvas &cv, Rect g, bool focused) {
+    ChromeColors cc = chrome_colors(focused);
+    cv.fill(g, cc.body);
     cv.hline(g.x, g.right(), g.y, kBlack);
     cv.vline(g.x, g.y, g.bottom(), kBlack);
-    cv.hline(g.x + 1, g.right(), g.y + 1, kBright);
-    cv.vline(g.x + 1, g.y + 1, g.bottom(), kBright);
-    cv.hline(g.x + 1, g.right(), g.bottom() - 1, kDeep);
-    cv.vline(g.right() - 1, g.y + 1, g.bottom(), kDeep);
+    cv.hline(g.x + 1, g.right(), g.y + 1, cc.bright);
+    cv.vline(g.x + 1, g.y + 1, g.bottom(), cc.bright);
+    cv.hline(g.x + 1, g.right(), g.bottom() - 1, cc.deep);
+    cv.vline(g.right() - 1, g.y + 1, g.bottom(), cc.deep);
     // Bright diagonal grip stripes toward the corner.
     for (int i = 0; i < 3; ++i) {
         int o = 4 + i * 4;
         for (int s = 0; s <= o; ++s) {
-            cv.put(g.right() - 3 - o + s, g.bottom() - 3 - s, pack(kBright));
-            cv.put(g.right() - 2 - o + s, g.bottom() - 3 - s, pack(kBright));
+            cv.put(g.right() - 3 - o + s, g.bottom() - 3 - s, pack(cc.bright));
+            cv.put(g.right() - 2 - o + s, g.bottom() - 3 - s, pack(cc.bright));
         }
     }
 }
