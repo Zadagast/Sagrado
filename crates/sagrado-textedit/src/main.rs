@@ -342,7 +342,8 @@ impl eframe::App for App {
         let colors = theme.colors;
 
         chrome::window_frame(ctx, &theme, skin_ref, &title, |ui| {
-            if let Some(id) = menu::menu_bar(ui, &theme, &menus) {
+            let unsaved = self.docs[current].is_dirty();
+            if let Some(id) = menu::menu_bar(ui, &theme, &menus, unsaved) {
                 command = Some(id);
             }
             ui.add_space(2.0);

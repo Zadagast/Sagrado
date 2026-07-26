@@ -1,6 +1,6 @@
 //! Menu bar and document tab bar, drawn in the KDX style from theme colors.
 
-use eframe::egui::{self, Align2, Rect, Sense, Ui, Vec2};
+use eframe::egui::{self, Align2, Color32, Rect, Sense, StrokeKind, Ui, Vec2};
 use sagrado_theme::Theme;
 
 use crate::fonts;
@@ -62,8 +62,10 @@ impl Menu {
 }
 
 /// Draw a KDX-style menu bar and return the `id` of any command chosen this
-/// frame. Menu titles highlight on hover and open a themed pull-down.
-pub fn menu_bar(ui: &mut Ui, theme: &Theme, menus: &[Menu]) -> Option<String> {
+/// frame. Menu titles highlight on hover and open a themed pull-down. When
+/// `unsaved` is set, Haxial's warning-triangle save indicator is shown at the
+/// right end of the bar.
+pub fn menu_bar(ui: &mut Ui, theme: &Theme, menus: &[Menu], unsaved: bool) -> Option<String> {
     let c = theme.colors;
     let font = fonts::ui_font();
     let bar_h = 26.0;
@@ -132,11 +134,57 @@ pub fn menu_bar(ui: &mut Ui, theme: &Theme, menus: &[Menu]) -> Option<String> {
         x += title_rect.width() + 6.0;
     }
 
+    save_indicator(
+        ui,
+        theme,
+        egui::pos2(bar.right() - 14.0, bar.center().y),
+        unsaved,
+    );
+
     ui.memory_mut(|m| m.data.insert_temp(state_id, open_menu));
     if open_menu.is_some() {
         ui.ctx().request_repaint();
     }
     chosen
+}
+
+/// Haxial's save indicator at the right of the menu bar: a plain grey
+/// triangle when the document is saved, a yellow warning triangle with an
+/// exclamation mark when there are unsaved changes.
+fn save_indicator(ui: &Ui, theme: &Theme, center: egui::Pos2, unsaved: bool) {
+    let tri = vec![
+        egui::pos2(center.x, center.y - 6.0),
+        egui::pos2(center.x + 7.0, center.y + 6.0),
+        egui::pos2(center.x - 7.0, center.y + 6.0),
+    ];
+    if unsaved {
+        let yellow = egui::Color32::from_rgb(0xFF, 0xCC, 0x00);
+        ui.painter().add(egui::Shape::convex_polygon(
+            tri,
+            yellow,
+            (1.0, egui::Color32::BLACK),
+        ));
+        ui.painter().line_segment(
+            [
+                egui::pos2(center.x, center.y - 2.0),
+                egui::pos2(center.x, center.y + 2.0),
+            ],
+            (1.5, egui::Color32::BLACK),
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(center.x, center.y + 3.5),
+                egui::pos2(center.x, center.y + 4.5),
+            ],
+            (1.5, egui::Color32::BLACK),
+        );
+    } else {
+        ui.painter().add(egui::Shape::convex_polygon(
+            tri,
+            theme.colors.disabled_text,
+            egui::Stroke::NONE,
+        ));
+    }
 }
 
 enum DropdownResult {
@@ -278,44 +326,66 @@ pub fn doc_tabs(
     selected: usize,
 ) -> Option<TabEvent> {
     let c = theme.colors;
+    let table = |i: usize, def: Color32| theme.color_table.get(i).copied().unwrap_or(def);
+    // KDX's active tab is a bright red plate with a black border; the strip
+    // behind is the grey primary background.
+    let active_fill = table(36, c.selection);
+    let active_shadow = table(40, c.primary_frame);
     let font = fonts::ui_font();
-    let tab_h = 30.0;
+    let tab_h = 22.0;
     let mut event = None;
+
+    let strip = Rect::from_min_size(
+        ui.cursor().min,
+        Vec2::new(ui.available_width(), tab_h + 4.0),
+    );
+    ui.painter().rect_filled(strip, 0.0, c.primary_background);
+    ui.painter().line_segment(
+        [strip.left_bottom(), strip.right_bottom()],
+        (1.0, Color32::BLACK),
+    );
+
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add_space(4.0);
+        ui.spacing_mut().item_spacing.x = 3.0;
         for (i, name) in tabs.iter().enumerate() {
             let text_w = ui
                 .painter()
                 .layout_no_wrap(name.clone(), font.clone(), c.text)
                 .size()
                 .x;
-            let w = text_w + 44.0;
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, tab_h), Sense::click());
+            let w = text_w + 32.0;
+            ui.add_space(0.0);
+            let (row, _) = ui.allocate_exact_size(Vec2::new(w, tab_h + 4.0), Sense::hover());
+            let rect =
+                Rect::from_min_size(egui::pos2(row.left(), row.top() + 2.0), Vec2::new(w, tab_h));
+            let resp = ui.interact(rect, ui.id().with(("tab", i)), Sense::click());
             let active = i == selected;
             let p = ui.painter();
-            let bg = if active {
-                c.selection
-            } else {
-                c.primary_background
-            };
-            p.rect_filled(rect, 0.0, bg);
-            // Raised bevel: light on top/left, dark on bottom/right.
-            let (tl, br) = (c.primary_light, c.primary_dark);
-            p.line_segment([rect.left_top(), rect.right_top()], (2.0, tl));
-            p.line_segment([rect.left_top(), rect.left_bottom()], (2.0, tl));
-            p.line_segment([rect.left_bottom(), rect.right_bottom()], (2.0, br));
-            p.line_segment([rect.right_top(), rect.right_bottom()], (2.0, br));
+            if active {
+                // Red plate: black border, red fill, bottom-right shadow.
+                p.rect(
+                    rect,
+                    0.0,
+                    active_fill,
+                    (1.0, Color32::BLACK),
+                    StrokeKind::Inside,
+                );
+                p.line_segment(
+                    [rect.left_bottom(), rect.right_bottom()],
+                    (2.0, active_shadow),
+                );
+            }
             let fg = if active { c.selection_text } else { c.text };
-            // Document glyph.
             p.text(
-                egui::pos2(rect.left() + 8.0, rect.center().y),
+                egui::pos2(rect.left() + 7.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 "▤",
                 font.clone(),
                 fg,
             );
             p.text(
-                egui::pos2(rect.left() + 26.0, rect.center().y),
+                egui::pos2(rect.left() + 22.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 name,
                 font.clone(),

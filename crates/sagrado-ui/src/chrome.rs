@@ -1,11 +1,13 @@
-//! Custom window chrome drawn from the theme's Window Frame images.
+//! KDX window chrome: a single layout + paint engine for every appearance.
 //!
-//! The frame image's positions give the frame thickness on each side (the
-//! top thickness is the title bar); the title-bar buttons carry their own
-//! offsets in their positions, anchored from the window edges. Themes that
-//! ship no window art (colour-only appearances such as Haxial's built-in
-//! "Standard") fall back to a functional chrome drawn from theme colours, so
-//! the window can still be dragged, resized, closed, minimised and maximised.
+//! The chrome always has the same pieces — frame, title bar, close /
+//! minimize / maximize (and optional window-menu) buttons, drag strip and a
+//! bottom-right grow box. Layout comes from the theme's position metadata
+//! when window art exists, otherwise from the classic Haxial "Standard"
+//! metrics. Each piece is painted from its `.hap` image when the theme
+//! provides one, and as the KDX Standard primitive (drawn from the color
+//! table) when it doesn't, so art overlays pixels without ever gating
+//! behavior.
 
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Rect, Sense, StrokeKind, Ui, Vec2, ViewportCommand,
@@ -14,9 +16,238 @@ use sagrado_theme::{Slot, Theme};
 
 use crate::paint::{natural, nine_slice, SkinTextures};
 
-/// Show a fully skinned window: themed frame, title bar with menu / minimize
-/// / maximize / close buttons, drag-to-move, and a resize corner. The content
-/// closure fills the client area.
+/// Standard-chrome metrics used when the theme carries no window art.
+const STD_TITLE_H: f32 = 20.0;
+const STD_BORDER: f32 = 5.0;
+const STD_BTN: Vec2 = Vec2::new(16.0, 13.0);
+const STD_GRIP: f32 = 13.0;
+
+/// The chrome buttons a window can have.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChromeButton {
+    Close,
+    Minimize,
+    Maximize,
+    WindowMenu,
+}
+
+impl ChromeButton {
+    fn slots(self) -> (Slot, Slot, Slot) {
+        match self {
+            ChromeButton::Close => (
+                Slot::WindowCloseNormal,
+                Slot::WindowCloseFocus,
+                Slot::WindowCloseHilited,
+            ),
+            ChromeButton::Minimize => (
+                Slot::WindowMinimizeNormal,
+                Slot::WindowMinimizeFocus,
+                Slot::WindowMinimizeHilited,
+            ),
+            ChromeButton::Maximize => (
+                Slot::WindowMaximizeNormal,
+                Slot::WindowMaximizeFocus,
+                Slot::WindowMaximizeHilited,
+            ),
+            ChromeButton::WindowMenu => (
+                Slot::WindowMenuNormal,
+                Slot::WindowMenuFocus,
+                Slot::WindowMenuHilited,
+            ),
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match self {
+            ChromeButton::Close => "X",
+            ChromeButton::Minimize => "-",
+            ChromeButton::Maximize => "+",
+            ChromeButton::WindowMenu => "",
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            ChromeButton::Close => "close",
+            ChromeButton::Minimize => "minimize",
+            ChromeButton::Maximize => "maximize",
+            ChromeButton::WindowMenu => "window_menu",
+        }
+    }
+}
+
+/// Where every chrome piece goes this frame. Computed once, before any
+/// painting or interaction, from theme metadata (when window art exists) or
+/// Standard metrics.
+struct ChromeLayout {
+    title_bar: Rect,
+    client: Rect,
+    buttons: Vec<(ChromeButton, Rect)>,
+    /// Decorative hatched drag stripes (Standard chrome only).
+    hatch_box: Option<Rect>,
+    drag: Rect,
+    grip: Rect,
+}
+
+/// Colors the Standard primitives are drawn with, resolved from the theme's
+/// color table (window-frame ramp, entries 36..40) with generic fallbacks.
+struct ChromeColors {
+    fill: Color32,
+    fill_top: Color32,
+    fill_bottom: Color32,
+    pressed: Color32,
+    shadow: Color32,
+    text: Color32,
+}
+
+impl ChromeColors {
+    fn resolve(theme: &Theme, focused: bool) -> Self {
+        let c = theme.colors;
+        let table = |i: usize, def: Color32| theme.color_table.get(i).copied().unwrap_or(def);
+        let bright = table(36, c.primary_dark);
+        let dark = table(38, c.primary_frame);
+        let deep = table(40, c.primary_frame);
+        let (fill_top, fill_bottom) = if focused {
+            (bright, dark)
+        } else {
+            (dark, deep)
+        };
+        Self {
+            fill: if focused { bright } else { dark },
+            fill_top,
+            fill_bottom,
+            pressed: dark,
+            shadow: deep,
+            text: if focused { c.text } else { c.disabled_text },
+        }
+    }
+}
+
+fn layout(theme: &Theme, rect: Rect, focused: bool) -> ChromeLayout {
+    let frame_slot = if focused {
+        Slot::WindowFrameFocus
+    } else {
+        Slot::WindowFrameNormal
+    };
+    let frame_img = theme
+        .image(frame_slot)
+        .or_else(|| theme.image(Slot::WindowFrameNormal));
+
+    // Frame thickness: position metadata when art exists, Standard otherwise.
+    let (l, t, r, b) = match frame_img {
+        Some(img) => (
+            img.pos_left(),
+            img.pos_top(),
+            img.pos_right(),
+            img.pos_bottom(),
+        ),
+        None => (STD_BORDER, STD_TITLE_H, STD_BORDER, STD_BORDER),
+    };
+    let title_bar = Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + t));
+    let client = Rect::from_min_max(
+        egui::pos2(rect.left() + l, rect.top() + t),
+        egui::pos2(rect.right() - r, rect.bottom() - b),
+    );
+
+    // Buttons: each anchored by its own position metadata (right offset from
+    // the right edge, or left offset when right is 0), sized by its
+    // reference (focus/normal) image; Standard places X left, +/− right.
+    let mut buttons = Vec::new();
+    let mut occupied_left: f32 = l;
+    let mut occupied_right: f32 = r;
+    let order = [
+        ChromeButton::Close,
+        ChromeButton::Maximize,
+        ChromeButton::Minimize,
+        ChromeButton::WindowMenu,
+    ];
+    let mut any_button_art = false;
+    for btn in order {
+        let (normal, focus, _) = btn.slots();
+        if let Some(img) = theme.image(focus).or_else(|| theme.image(normal)) {
+            any_button_art = true;
+            let [w, h] = img.size();
+            let (w, h) = (w as f32, h as f32);
+            let x = if img.pos_left() > 0.0 {
+                rect.left() + img.pos_left()
+            } else {
+                rect.right() - img.pos_right() - w
+            };
+            let y = rect.top() + img.pos_top().max(2.0);
+            let btn_rect = Rect::from_min_size(egui::pos2(x, y), Vec2::new(w, h));
+            if img.pos_left() > 0.0 {
+                occupied_left = occupied_left.max(img.pos_left() + w);
+            } else {
+                occupied_right = occupied_right.max(img.pos_right() + w);
+            }
+            buttons.push((btn, btn_rect));
+        }
+    }
+
+    let mut hatch_box = None;
+    if !any_button_art {
+        // Standard layout: X box + hatch stripes top-left, +/− top-right.
+        let cy = title_bar.center().y;
+        let close = Rect::from_center_size(egui::pos2(rect.left() + 12.0, cy), STD_BTN);
+        let hatch = Rect::from_center_size(
+            egui::pos2(close.right() + 17.0, cy),
+            Vec2::new(26.0, STD_BTN.y),
+        );
+        let min = Rect::from_center_size(egui::pos2(rect.right() - 12.0, cy), STD_BTN);
+        let max = Rect::from_center_size(egui::pos2(min.left() - 12.0, cy), STD_BTN);
+        occupied_left = hatch.right() - rect.left();
+        occupied_right = rect.right() - max.left();
+        buttons.push((ChromeButton::Close, close));
+        buttons.push((ChromeButton::Maximize, max));
+        buttons.push((ChromeButton::Minimize, min));
+        hatch_box = Some(hatch);
+    }
+
+    let drag = Rect::from_min_max(
+        egui::pos2(rect.left() + occupied_left, rect.top()),
+        egui::pos2(rect.right() - occupied_right, title_bar.bottom()),
+    );
+
+    // Grow box: position metadata when resize art exists, else the Standard
+    // hatched corner box.
+    let grip = match theme
+        .image(if focused {
+            Slot::WindowResizeFocus
+        } else {
+            Slot::WindowResizeNormal
+        })
+        .or_else(|| theme.image(Slot::WindowResizeNormal))
+    {
+        Some(img) => {
+            let [w, h] = img.size();
+            let pos = egui::pos2(
+                rect.right() - img.pos_right().max(1.0) - w as f32,
+                rect.bottom() - img.pos_bottom().max(1.0) - h as f32,
+            );
+            Rect::from_min_size(pos, Vec2::new(w as f32, h as f32))
+        }
+        None => Rect::from_min_max(
+            egui::pos2(
+                rect.right() - 1.0 - STD_GRIP,
+                rect.bottom() - 1.0 - STD_GRIP,
+            ),
+            egui::pos2(rect.right() - 1.0, rect.bottom() - 1.0),
+        ),
+    };
+
+    ChromeLayout {
+        title_bar,
+        client,
+        buttons,
+        hatch_box,
+        drag,
+        grip,
+    }
+}
+
+/// Show a KDX window: themed or Standard-primitive frame, title bar with
+/// working controls, drag-to-move and a grow box. The content closure fills
+/// the client area.
 pub fn window_frame(
     ctx: &egui::Context,
     theme: &Theme,
@@ -25,11 +256,11 @@ pub fn window_frame(
     add_contents: impl FnOnce(&mut Ui),
 ) {
     let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
-    let frame_slot = if focused {
-        Slot::WindowFrameFocus
-    } else {
-        Slot::WindowFrameNormal
-    };
+    // Take focus on the first press so widgets respond without needing a
+    // separate click to activate the window.
+    if !focused && ctx.input(|i| i.pointer.any_pressed()) {
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+    }
 
     egui::CentralPanel::default()
         .frame(egui::Frame::new())
@@ -38,171 +269,185 @@ pub fn window_frame(
             let c = theme.colors;
             ui.painter().rect_filled(rect, 0.0, c.primary_background);
 
-            let Some(frame_img) = theme.image(frame_slot) else {
-                let (client, grip_rect) = fallback_chrome(ui, ctx, theme, title, rect, focused);
-                add_contents(&mut content_ui(ui, client));
-                resize_grip(ui, ctx, grip_rect);
-                return;
-            };
-            let (l, t, r, b) = (
-                frame_img.pos_left(),
-                frame_img.pos_top(),
-                frame_img.pos_right(),
-                frame_img.pos_bottom(),
-            );
+            let lay = layout(theme, rect, focused);
+            let colors = ChromeColors::resolve(theme, focused);
 
-            if let Some(tex) = skin.get(frame_slot) {
-                nine_slice(ui.painter(), tex, frame_img, rect, Color32::WHITE);
-            }
+            paint_frame(ui, theme, skin, rect, &lay, &colors, focused);
 
-            let title_bar = Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + t));
-
-            // Title-bar buttons, anchored by their position metadata. The hit
-            // area and footprint come from the button's reference (focus/
-            // normal) image; the per-state image is drawn centred in that
-            // footprint so a differently sized "hilited" image (common in
-            // themes such as Boilerplate) doesn't jump out of place.
-            let mut occupied_left = l;
-            let mut occupied_right = r;
-            let mut button = |ui: &mut Ui,
-                              normal: Slot,
-                              focus: Slot,
-                              hilited: Slot,
-                              id: &str|
-             -> Option<(Rect, bool)> {
-                let img = theme.image(focus).or_else(|| theme.image(normal))?;
-                let [w, h] = img.size();
-                let (w, h) = (w as f32, h as f32);
-                let x = if img.pos_left() > 0.0 {
-                    rect.left() + img.pos_left()
-                } else {
-                    rect.right() - img.pos_right() - w
-                };
-                let y = rect.top() + img.pos_top().max(2.0);
-                let btn_rect = Rect::from_min_size(egui::pos2(x, y), Vec2::new(w, h));
-                let resp = ui.interact(btn_rect, ui.id().with(id), Sense::click());
-                let slot = if resp.is_pointer_button_down_on() {
-                    hilited
-                } else if focused {
-                    focus
-                } else {
-                    normal
-                };
-                let (slot, img) = match theme.image(slot) {
-                    Some(i) => (slot, i),
-                    None => (normal, theme.image(normal)?),
-                };
-                if let Some(tex) = skin.get(slot) {
-                    natural(ui.painter(), tex, img, btn_rect, Color32::WHITE);
-                }
-                if img.pos_left() > 0.0 {
-                    occupied_left = occupied_left.max(img.pos_left() + w);
-                } else {
-                    occupied_right = occupied_right.max(img.pos_right() + w);
-                }
-                Some((btn_rect, resp.clicked()))
-            };
-
-            if let Some((_, clicked)) = button(
-                ui,
-                Slot::WindowCloseNormal,
-                Slot::WindowCloseFocus,
-                Slot::WindowCloseHilited,
-                "close",
-            ) {
-                if clicked {
-                    ctx.send_viewport_cmd(ViewportCommand::Close);
+            // Buttons: interaction on the stable layout rect; per-state art
+            // centred inside it, or the Standard box primitive.
+            for &(btn, btn_rect) in &lay.buttons {
+                let resp = ui.interact(btn_rect, ui.id().with(btn.id()), Sense::click());
+                let pressed = resp.is_pointer_button_down_on();
+                paint_button(ui, theme, skin, btn, btn_rect, &colors, focused, pressed);
+                if resp.clicked() {
+                    match btn {
+                        ChromeButton::Close => ctx.send_viewport_cmd(ViewportCommand::Close),
+                        ChromeButton::Minimize => {
+                            ctx.send_viewport_cmd(ViewportCommand::Minimized(true))
+                        }
+                        ChromeButton::Maximize => {
+                            let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                            ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+                        }
+                        ChromeButton::WindowMenu => {}
+                    }
                 }
             }
-            if let Some((_, clicked)) = button(
-                ui,
-                Slot::WindowMaximizeNormal,
-                Slot::WindowMaximizeFocus,
-                Slot::WindowMaximizeHilited,
-                "maximize",
-            ) {
-                if clicked {
-                    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                    ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
-                }
-            }
-            if let Some((_, clicked)) = button(
-                ui,
-                Slot::WindowMinimizeNormal,
-                Slot::WindowMinimizeFocus,
-                Slot::WindowMinimizeHilited,
-                "minimize",
-            ) {
-                if clicked {
-                    ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
-                }
-            }
-            let _ = button(
-                ui,
-                Slot::WindowMenuNormal,
-                Slot::WindowMenuFocus,
-                Slot::WindowMenuFocus,
-                "window_menu",
-            );
 
             // Title text between the buttons.
-            let title_color = if focused { c.text } else { c.disabled_text };
-            let text_area = Rect::from_min_max(
-                egui::pos2(rect.left() + occupied_left + 4.0, title_bar.top()),
-                egui::pos2(rect.right() - occupied_right - 4.0, title_bar.bottom()),
-            );
+            let text_area = lay.drag.shrink2(Vec2::new(4.0, 0.0));
             ui.painter().with_clip_rect(text_area).text(
-                text_area.center(),
+                lay.title_bar.center(),
                 Align2::CENTER_CENTER,
                 title,
                 crate::fonts::ui_font(),
-                title_color,
+                colors.text,
             );
 
-            // Drag the title bar to move the window.
-            let drag_rect = Rect::from_min_max(
-                egui::pos2(rect.left() + occupied_left, rect.top()),
-                egui::pos2(rect.right() - occupied_right, rect.top() + t),
-            );
-            title_drag(ui, ctx, drag_rect);
+            title_drag(ui, ctx, lay.drag);
 
-            // Resize button in the bottom-right corner. Paint it now, but run
-            // its drag interaction *after* the content so it wins the corner
-            // (egui gives the last-added widget priority where they overlap).
-            let resize_slot = if focused {
-                Slot::WindowResizeFocus
-            } else {
-                Slot::WindowResizeNormal
-            };
-            let grip_rect = theme
-                .image(resize_slot)
-                .or_else(|| theme.image(Slot::WindowResizeNormal))
-                .map(|img| {
-                    let [w, h] = img.size();
-                    let (w, h) = (w as f32, h as f32);
-                    let pos = egui::pos2(
-                        rect.right() - img.pos_right().max(1.0) - w,
-                        rect.bottom() - img.pos_bottom().max(1.0) - h,
-                    );
-                    if let Some(tex) = skin
-                        .get(resize_slot)
-                        .or_else(|| skin.get(Slot::WindowResizeNormal))
-                    {
-                        crate::paint::natural_at(ui.painter(), tex, img, pos, Color32::WHITE);
-                    }
-                    Rect::from_min_size(pos, Vec2::new(w, h))
-                });
+            add_contents(&mut content_ui(ui, lay.client));
 
-            let client = Rect::from_min_max(
-                egui::pos2(rect.left() + l, rect.top() + t),
-                egui::pos2(rect.right() - r, rect.bottom() - b),
-            );
-            add_contents(&mut content_ui(ui, client));
-
-            if let Some(grip_rect) = grip_rect {
-                resize_grip(ui, ctx, grip_rect);
-            }
+            // Grow box last so it wins the shared corner over the content.
+            resize_grip(ui, ctx, lay.grip);
         });
+}
+
+/// Frame + title bar + hatch/grip decorations: art when present, Standard
+/// primitives when not.
+#[allow(clippy::too_many_arguments)]
+fn paint_frame(
+    ui: &mut Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    rect: Rect,
+    lay: &ChromeLayout,
+    colors: &ChromeColors,
+    focused: bool,
+) {
+    let frame_slot = if focused {
+        Slot::WindowFrameFocus
+    } else {
+        Slot::WindowFrameNormal
+    };
+    let frame_slot = if theme.image(frame_slot).is_some() {
+        frame_slot
+    } else {
+        Slot::WindowFrameNormal
+    };
+    if let (Some(tex), Some(img)) = (skin.get(frame_slot), theme.image(frame_slot)) {
+        nine_slice(ui.painter(), tex, img, rect, Color32::WHITE);
+    } else {
+        let black = Color32::BLACK;
+        // Frame: black outline, red band, black inner outline.
+        ui.painter()
+            .rect(rect, 0.0, colors.fill, (1.0, black), StrokeKind::Inside);
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            0.0,
+            (STD_BORDER - 2.0, colors.fill),
+            StrokeKind::Inside,
+        );
+        ui.painter().rect_stroke(
+            rect.shrink(STD_BORDER - 1.0),
+            0.0,
+            (1.0, black),
+            StrokeKind::Inside,
+        );
+        // Title bar: vertical gradient, bright at the top fading darker.
+        let bar = lay.title_bar;
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(bar.left_top(), colors.fill_top);
+        mesh.colored_vertex(bar.right_top(), colors.fill_top);
+        mesh.colored_vertex(bar.right_bottom(), colors.fill_bottom);
+        mesh.colored_vertex(bar.left_bottom(), colors.fill_bottom);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        ui.painter().add(egui::Shape::mesh(mesh));
+        ui.painter().line_segment(
+            [
+                egui::pos2(bar.left(), bar.bottom() - 0.5),
+                egui::pos2(bar.right(), bar.bottom() - 0.5),
+            ],
+            (1.0, black),
+        );
+        // Hatched drag stripes next to the close box.
+        if let Some(hr) = lay.hatch_box {
+            ui.painter()
+                .rect(hr, 0.0, colors.fill, (1.0, black), StrokeKind::Inside);
+            hatch(ui, hr.shrink(2.0), theme.colors.text);
+        }
+    }
+
+    // Grow box art; Standard hatched red box otherwise.
+    let resize_slot = if focused {
+        Slot::WindowResizeFocus
+    } else {
+        Slot::WindowResizeNormal
+    };
+    let resize_slot = if theme.image(resize_slot).is_some() {
+        resize_slot
+    } else {
+        Slot::WindowResizeNormal
+    };
+    if let (Some(tex), Some(img)) = (skin.get(resize_slot), theme.image(resize_slot)) {
+        crate::paint::natural_at(ui.painter(), tex, img, lay.grip.min, Color32::WHITE);
+    } else {
+        ui.painter().rect(
+            lay.grip,
+            0.0,
+            colors.fill,
+            (1.0, Color32::BLACK),
+            StrokeKind::Inside,
+        );
+        hatch(ui, lay.grip.shrink(2.0), colors.shadow);
+    }
+}
+
+/// One title-bar button: per-state art centred in the stable rect, or the
+/// Standard box primitive (black border, red fill, white glyph).
+#[allow(clippy::too_many_arguments)]
+fn paint_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    skin: &SkinTextures,
+    btn: ChromeButton,
+    rect: Rect,
+    colors: &ChromeColors,
+    focused: bool,
+    pressed: bool,
+) {
+    let (normal, focus, hilited) = btn.slots();
+    let want = if pressed {
+        hilited
+    } else if focused {
+        focus
+    } else {
+        normal
+    };
+    let slot = [want, focus, normal]
+        .into_iter()
+        .find(|s| theme.image(*s).is_some());
+    if let Some(slot) = slot {
+        if let (Some(tex), Some(img)) = (skin.get(slot), theme.image(slot)) {
+            natural(ui.painter(), tex, img, rect, Color32::WHITE);
+        }
+        return;
+    }
+    let fill = if pressed { colors.pressed } else { colors.fill };
+    ui.painter()
+        .rect(rect, 0.0, fill, (1.0, Color32::BLACK), StrokeKind::Inside);
+    let glyph = btn.glyph();
+    if !glyph.is_empty() {
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            glyph,
+            crate::fonts::ui_font(),
+            theme.colors.text,
+        );
+    }
 }
 
 fn content_ui(ui: &mut Ui, client: Rect) -> Ui {
@@ -241,117 +486,19 @@ fn resize_grip(ui: &mut Ui, ctx: &egui::Context, grip_rect: Rect) {
     }
 }
 
-/// Chrome for colour-only appearances that ship no window art: a bevelled
-/// title bar drawn from theme colours with working close / minimise /
-/// maximise buttons, drag-to-move and a resize grip. Returns the client rect.
-fn fallback_chrome(
-    ui: &mut Ui,
-    ctx: &egui::Context,
-    theme: &Theme,
-    title: &str,
-    rect: Rect,
-    focused: bool,
-) -> (Rect, Rect) {
-    let c = theme.colors;
-    let title_h = 22.0;
-    let border = 4.0;
-
-    // Outer border + title bar.
-    ui.painter().rect(
-        rect,
-        0.0,
-        c.primary_background,
-        (1.0, c.primary_frame),
-        StrokeKind::Inside,
-    );
-    let title_bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), title_h));
-    ui.painter().rect_filled(title_bar, 0.0, c.primary_dark);
-    ui.painter().line_segment(
-        [title_bar.left_bottom(), title_bar.right_bottom()],
-        (1.0, c.primary_frame),
-    );
-
-    // Traffic-light style buttons at the left: close, minimise, maximise.
-    let btn = 14.0;
-    let gap = 6.0;
-    let cy = title_bar.center().y;
-    let mut x = rect.left() + 8.0;
-    let title_fg = if focused {
-        c.selection_text
-    } else {
-        c.disabled_text
-    };
-
-    let mut chrome_button = |ui: &mut Ui, id: &str, glyph: &str, fill: Color32| -> bool {
-        let r = Rect::from_center_size(egui::pos2(x + btn / 2.0, cy), Vec2::splat(btn));
-        let resp = ui.interact(r, ui.id().with(id), Sense::click());
-        let bg = if resp.is_pointer_button_down_on() {
-            c.primary_light
-        } else {
-            fill
-        };
-        ui.painter()
-            .rect(r, 3.0, bg, (1.0, c.primary_frame), StrokeKind::Inside);
-        ui.painter().text(
-            r.center(),
-            Align2::CENTER_CENTER,
-            glyph,
-            egui::FontId::proportional(11.0),
-            c.primary_frame,
-        );
-        x += btn + gap;
-        resp.clicked()
-    };
-
-    if chrome_button(ui, "fb_close", "×", theme.colors.alert) {
-        ctx.send_viewport_cmd(ViewportCommand::Close);
-    }
-    if chrome_button(ui, "fb_min", "–", c.primary_light) {
-        ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
-    }
-    if chrome_button(ui, "fb_max", "+", c.primary_light) {
-        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-        ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
-    }
-
-    // Title text, centred in the remaining strip.
-    let text_area = Rect::from_min_max(egui::pos2(x + 4.0, title_bar.top()), title_bar.max);
-    ui.painter().with_clip_rect(text_area).text(
-        text_area.center(),
-        Align2::CENTER_CENTER,
-        title,
-        crate::fonts::ui_font(),
-        title_fg,
-    );
-
-    // Drag strip covers the title bar right of the buttons.
-    title_drag(
-        ui,
-        ctx,
-        Rect::from_min_max(egui::pos2(x, rect.top()), title_bar.right_bottom()),
-    );
-
-    // Resize grip: a small bevelled corner triangle. Painted here; the drag
-    // interaction runs after the content so it wins the shared corner.
-    let grip = 16.0;
-    let grip_rect = Rect::from_min_max(
-        egui::pos2(rect.right() - grip, rect.bottom() - grip),
-        rect.max,
-    );
-    for i in 1..=3 {
-        let o = i as f32 * 4.0;
-        ui.painter().line_segment(
+/// Diagonal stripes used by the Standard chrome's drag and resize boxes.
+fn hatch(ui: &Ui, r: Rect, color: Color32) {
+    let clip = ui.painter().with_clip_rect(r);
+    let step = 5.0;
+    let mut x = r.left() - r.height();
+    while x < r.right() {
+        clip.line_segment(
             [
-                egui::pos2(grip_rect.right() - o, grip_rect.bottom() - 1.0),
-                egui::pos2(grip_rect.right() - 1.0, grip_rect.bottom() - o),
+                egui::pos2(x, r.bottom()),
+                egui::pos2(x + r.height(), r.top()),
             ],
-            (1.0, c.primary_frame),
+            (2.0, color),
         );
+        x += step;
     }
-
-    let client = Rect::from_min_max(
-        egui::pos2(rect.left() + border, rect.top() + title_h),
-        egui::pos2(rect.right() - border, rect.bottom() - border),
-    );
-    (client, grip_rect)
 }

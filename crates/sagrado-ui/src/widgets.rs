@@ -348,25 +348,34 @@ fn scrollbar_in(
     enabled: bool,
     horizontal: bool,
 ) -> Response {
-    let (track_slots, thumb_normal, thumb_hilited) = if horizontal {
+    // KDX classically puts a double arrow (both directions) at each end of
+    // the bar; prefer that art and fall back to the single-arrow track.
+    let (double_slot, single_slot, disabled_slot, thumb_normal, thumb_hilited) = if horizontal {
         (
-            (Slot::HScrollSingleArrows, Slot::HScrollDisabled),
+            Slot::HScrollDoubleArrows,
+            Slot::HScrollSingleArrows,
+            Slot::HScrollDisabled,
             Slot::HScrollIndicatorNormal,
             Slot::HScrollIndicatorHilited,
         )
     } else {
         (
-            (Slot::VScrollSingleArrows, Slot::VScrollDisabled),
+            Slot::VScrollDoubleArrows,
+            Slot::VScrollSingleArrows,
+            Slot::VScrollDisabled,
             Slot::VScrollIndicatorNormal,
             Slot::VScrollIndicatorHilited,
         )
     };
-    let track_slot = if enabled {
-        track_slots.0
+    let track_slot = if !enabled {
+        disabled_slot
+    } else if theme.image(double_slot).is_some() {
+        double_slot
     } else {
-        track_slots.1
+        single_slot
     };
     let track_img = theme.image(track_slot);
+    let double_arrows = track_img.is_none() || track_slot == double_slot;
 
     // Scrollbar images are complete bars (16 px thick in original themes);
     // arrows never stretch, so their extents are the track's 9-slice caps
@@ -381,7 +390,7 @@ fn scrollbar_in(
                 (w as f32, caps[1].max(4.0), caps[3].max(4.0))
             }
         }
-        None => (16.0, 16.0, 16.0),
+        None => (16.0, 26.0, 26.0),
     };
 
     let axis = |p: egui::Pos2| if horizontal { p.x } else { p.y };
@@ -404,9 +413,17 @@ fn scrollbar_in(
         if let Some(pos) = resp.interact_pointer_pos() {
             let p = axis(pos);
             let zone = if p < span_min {
-                ScrollZone::Dec
+                if double_arrows && p >= span_min - arrow_a / 2.0 {
+                    ScrollZone::Inc
+                } else {
+                    ScrollZone::Dec
+                }
             } else if p > span_max {
-                ScrollZone::Inc
+                if double_arrows && p <= span_max + arrow_b / 2.0 {
+                    ScrollZone::Dec
+                } else {
+                    ScrollZone::Inc
+                }
             } else if p >= thumb_start && p <= thumb_start + thumb_len {
                 ScrollZone::Thumb(p - thumb_start)
             } else if p < thumb_start {
@@ -468,14 +485,55 @@ fn scrollbar_in(
     match (skin.get(track_slot), track_img) {
         (Some(tex), Some(img)) => nine_slice(ui.painter(), tex, img, rect, Color32::WHITE),
         _ => {
+            // KDX Standard style: dark track with black border and grey
+            // arrow triangles at both ends.
             let c = theme.colors;
             ui.painter().rect(
                 rect,
                 0.0,
                 c.primary_background,
-                (1.0, c.primary_dark),
+                (1.0, Color32::BLACK),
                 StrokeKind::Inside,
             );
+            let arrow_color = if enabled {
+                c.disabled_text
+            } else {
+                c.primary_dark
+            };
+            let tri = |center: egui::Pos2, dir: Vec2| {
+                let side = Vec2::new(-dir.y, dir.x);
+                ui.painter().add(egui::Shape::convex_polygon(
+                    vec![
+                        center + dir * 3.5,
+                        center - dir * 2.5 + side * 4.0,
+                        center - dir * 2.5 - side * 4.0,
+                    ],
+                    arrow_color,
+                    egui::Stroke::NONE,
+                ));
+            };
+            // A dec+inc arrow pair at each end, like KDX Standard.
+            let (dec_dir, inc_dir) = if horizontal {
+                (Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0))
+            } else {
+                (Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0))
+            };
+            let at = |d: f32| {
+                if horizontal {
+                    egui::pos2(rect.left() + d, rect.center().y)
+                } else {
+                    egui::pos2(rect.center().x, rect.top() + d)
+                }
+            };
+            let len = if horizontal {
+                rect.width()
+            } else {
+                rect.height()
+            };
+            tri(at(arrow_a * 0.25), dec_dir);
+            tri(at(arrow_a * 0.75), inc_dir);
+            tri(at(len - arrow_b * 0.75), dec_dir);
+            tri(at(len - arrow_b * 0.25), inc_dir);
         }
     }
 
@@ -525,14 +583,32 @@ fn scrollbar_in(
                 }
             }
             _ => {
+                // KDX Standard style: grey thumb with black border and grip
+                // lines across the middle.
                 let c = theme.colors;
                 ui.painter().rect(
                     thumb_rect.shrink(1.0),
-                    2.0,
-                    c.primary_light,
-                    (1.0, c.primary_dark),
+                    0.0,
+                    c.primary_dark,
+                    (1.0, Color32::BLACK),
                     StrokeKind::Inside,
                 );
+                let mid = thumb_rect.center();
+                for i in -1..=1 {
+                    let o = i as f32 * 3.0;
+                    let (a, b) = if horizontal {
+                        (
+                            egui::pos2(mid.x + o, thumb_rect.top() + 4.0),
+                            egui::pos2(mid.x + o, thumb_rect.bottom() - 4.0),
+                        )
+                    } else {
+                        (
+                            egui::pos2(thumb_rect.left() + 4.0, mid.y + o),
+                            egui::pos2(thumb_rect.right() - 4.0, mid.y + o),
+                        )
+                    };
+                    ui.painter().line_segment([a, b], (1.0, c.disabled_text));
+                }
             }
         }
     }

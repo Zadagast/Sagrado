@@ -122,6 +122,7 @@ pub enum Slot {
     WindowMaximizeDisabled = 236,
     WindowMenuNormal = 238,
     WindowMenuFocus = 239,
+    WindowMenuHilited = 240,
     WindowResizeNormal = 243,
     WindowResizeFocus = 244,
     PopupWindowFrameNormal = 248,
