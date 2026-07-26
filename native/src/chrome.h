@@ -109,8 +109,8 @@ inline ChromeLayout chrome_layout(int w, int h, const Theme *theme = nullptr,
         lay.hatch_box = {0, 0, 0, 0};
     } else {
         lay.close_box = {5, kBtnTop, kBtn, kBtn};
-        lay.hatch_box = {lay.close_box.right() + 9, kBtnTop, 32, kBtn};
-        lay.min_box = {lay.client.right() - kBtn, kBtnTop, kBtn, kBtn};
+        lay.hatch_box = {lay.close_box.right() + 8, kBtnTop, 32, kBtn};
+        lay.min_box = {w - 5 - kBtn, kBtnTop, kBtn, kBtn};
         lay.max_box = {lay.min_box.x - 4 - kBtn, kBtnTop, kBtn, kBtn};
     }
 
@@ -141,13 +141,34 @@ inline void bevel_box(Canvas &cv, Rect r, bool pressed,
 }
 
 inline void diagonal_hatch(Canvas &cv, Rect r, Color c) {
-    // 3px-wide stripes on a 7px period, like the real drag box.
-    for (int i = -r.h - 7; i < r.w; i += 7)
+    // 3px-wide '/' stripes on a 7px period, like the real drag box.
+    for (int i = 0; i < r.w + r.h + 7; i += 7)
         for (int t = 0; t < 3; ++t)
             for (int y = 0; y < r.h; ++y) {
-                int x = i + t + y;
+                int x = i + t - y;
                 if (x >= 0 && x < r.w) cv.put(r.x + x, r.y + y, pack(c));
             }
+}
+
+// A Standard title-bar box exactly as the real TextEdit draws it: a 1px
+// black outline over the title gradient, no fill, no bevel. Pressed fills
+// with the deep shade.
+inline void flat_box(Canvas &cv, Rect r, bool pressed,
+                     ChromeColors cc = chrome_colors(true)) {
+    if (pressed) cv.fill(r, cc.deep);
+    cv.frame(r, kBlack);
+}
+
+// The 10x10 close glyph measured from the real window (box-relative 2,2).
+inline void close_glyph(Canvas &cv, Rect r, Color c) {
+    static const char *rows[10] = {
+        "WW......WW", "WWW....WWW", ".WWW..WWW.", "..WWWWWW..",
+        "...WWWW...", "...WWWW...", "..WWWWWW..", ".WWW..WWW.",
+        "WWW....WWW", "WW......WW",
+    };
+    for (int y = 0; y < 10; ++y)
+        for (int x = 0; x < 10; ++x)
+            if (rows[y][x] == 'W') cv.put(r.x + 2 + x, r.y + 2 + y, pack(c));
 }
 
 // The whole frame. Per the kit contract each piece paints .hap art when the
@@ -226,26 +247,19 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     int tw = cv.text_width(title);
     cv.text((win.w - tw) / 2, (kTitleH - kFontHeight) / 2, title, kWhite);
 
-    // Title-bar boxes: X, hatch drag stripes, + and -.
-    bevel_box(cv, lay.close_box, pressed_box == 1, cc);
-    {
-        Rect r = lay.close_box;
-        for (int i = 0; i < 6; ++i) {
-            cv.put(r.x + 4 + i, r.y + 4 + i, pack(kWhite));
-            cv.put(r.x + 5 + i, r.y + 4 + i, pack(kWhite));
-            cv.put(r.x + 4 + i, r.y + 9 - i, pack(kWhite));
-            cv.put(r.x + 5 + i, r.y + 9 - i, pack(kWhite));
-        }
-    }
-    bevel_box(cv, lay.hatch_box, false, cc);
-    diagonal_hatch(cv, {lay.hatch_box.x + 3, lay.hatch_box.y + 3,
-                        lay.hatch_box.w - 6, lay.hatch_box.h - 6},
+    // Title-bar boxes, measured from the real window: 1px black outlines
+    // over the gradient (no fill, no bevel) with thick white glyphs.
+    flat_box(cv, lay.close_box, pressed_box == 1, cc);
+    close_glyph(cv, lay.close_box, kWhite);
+    flat_box(cv, lay.hatch_box, false, cc);
+    diagonal_hatch(cv, {lay.hatch_box.x + 2, lay.hatch_box.y + 2,
+                        lay.hatch_box.w - 4, lay.hatch_box.h - 4},
                    kWhite);
-    bevel_box(cv, lay.max_box, pressed_box == 3, cc);
-    cv.fill({lay.max_box.x + 2, lay.max_box.y + 6, 10, 3}, kWhite);
-    cv.fill({lay.max_box.x + 6, lay.max_box.y + 2, 3, 10}, kWhite);
-    bevel_box(cv, lay.min_box, pressed_box == 4, cc);
-    cv.fill({lay.min_box.x + 2, lay.min_box.y + 6, 10, 3}, kWhite);
+    flat_box(cv, lay.max_box, pressed_box == 3, cc);
+    cv.fill({lay.max_box.x + 1, lay.max_box.y + 6, 10, 2}, kWhite);
+    cv.fill({lay.max_box.x + 5, lay.max_box.y + 2, 2, 10}, kWhite);
+    flat_box(cv, lay.min_box, pressed_box == 4, cc);
+    cv.fill({lay.min_box.x + 1, lay.min_box.y + 6, 10, 2}, kWhite);
 
     (void)hot_box;
 }
