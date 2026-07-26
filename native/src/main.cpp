@@ -4,6 +4,9 @@
 #include <windows.h>
 #include <windowsx.h>
 
+#include <string>
+#include <vector>
+
 #include "canvas.h"
 #include "chrome.h"
 
@@ -19,7 +22,7 @@ const char *kMenuItems[5][6] = {
     {"Find & Replace...", "Sort Lines", "Count Occurrences", nullptr},
     {"Add Favorite", "Show Favorites", nullptr},
     {"Documents Folder", "Desktop", nullptr},
-    {"Haxial Standard", nullptr},
+    {nullptr}, // Appearance: built dynamically from discovered .hap files
 };
 
 struct App {
@@ -40,7 +43,52 @@ struct App {
     int total_lines = 0; // document length
     int page_lines = 1;
     Rect sb{}, up1{}, dn1{}, up2{}, dn2{}, thumb{}, track{};
+    // Appearance (.hap) support.
+    Theme theme;
+    bool themed = false;
+    int theme_index = 0; // 0 = Haxial Standard (built-in primitives)
+    std::vector<std::string> hap_names, hap_paths;
 } g_app;
+
+// Find .hap files near the executable (the repo's themes/Appearances
+// folder, or an Appearances folder next to the program like Haxial).
+void discover_haps() {
+    char exe[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    std::string dir(exe);
+    size_t cut = dir.find_last_of("\\/");
+    dir = cut == std::string::npos ? "." : dir.substr(0, cut);
+    const char *cands[] = {"\\Appearances", "\\themes\\Appearances",
+                           "\\..\\themes\\Appearances",
+                           "\\..\\..\\themes\\Appearances"};
+    for (const char *c : cands) {
+        std::string base = dir + c;
+        WIN32_FIND_DATAA fd;
+        HANDLE fh = FindFirstFileA((base + "\\*.hap").c_str(), &fd);
+        if (fh == INVALID_HANDLE_VALUE) continue;
+        do {
+            std::string name(fd.cFileName);
+            g_app.hap_paths.push_back(base + "\\" + name);
+            g_app.hap_names.push_back(name.substr(0, name.size() - 4));
+        } while (FindNextFileA(fh, &fd));
+        FindClose(fh);
+        if (!g_app.hap_paths.empty()) break;
+    }
+}
+
+void select_theme(int index) {
+    g_app.theme_index = index;
+    g_app.themed = false;
+    if (index > 0 && index <= int(g_app.hap_paths.size())) {
+        Theme t;
+        if (load_hap(g_app.hap_paths[index - 1], t)) {
+            g_app.theme = std::move(t);
+            g_app.themed = true;
+        }
+    }
+}
+
+const Theme *active_theme() { return g_app.themed ? &g_app.theme : nullptr; }
 
 constexpr int kLineH = kFontHeight + 1;
 
@@ -186,9 +234,16 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
 }
 
 int menu_item_count(int m) {
+    if (m == 4) return 1 + int(g_app.hap_names.size());
     int n = 0;
     while (n < 6 && kMenuItems[m][n]) ++n;
     return n;
+}
+
+const char *menu_item_text(int m, int i) {
+    if (m == 4)
+        return i == 0 ? "Haxial Standard" : g_app.hap_names[i - 1].c_str();
+    return kMenuItems[m][i];
 }
 
 // The open pull-down menu: dark raised panel, red hilite bar, painted last.
@@ -198,7 +253,7 @@ void paint_dropdown(Canvas &cv) {
     int n = menu_item_count(m);
     int wmax = 0;
     for (int i = 0; i < n; ++i) {
-        int tw = cv.text_width(kMenuItems[m][i]);
+        int tw = cv.text_width(menu_item_text(m, i));
         if (tw > wmax) wmax = tw;
     }
     Rect r{g_app.menu_rects[m].x, g_app.menu_rects[m].bottom() + 2, wmax + 24,
@@ -213,7 +268,9 @@ void paint_dropdown(Canvas &cv) {
     for (int i = 0; i < n; ++i) {
         Rect item{r.x + 2, r.y + 2 + i * g_app.item_h, r.w - 4, g_app.item_h};
         if (i == g_app.hot_item) cv.fill(item, kBody);
-        cv.text(item.x + 10, item.y + 1, kMenuItems[m][i], kWhite);
+        if (m == 4 && i == g_app.theme_index)
+            cv.text(item.x + 2, item.y + 1, ">", kWhite);
+        cv.text(item.x + 10, item.y + 1, menu_item_text(m, i), kWhite);
     }
 }
 
@@ -224,12 +281,13 @@ void repaint(HWND hwnd) {
     if (w <= 0 || h <= 0) return;
     Canvas &cv = g_app.canvas;
     if (cv.width() != w || cv.height() != h) cv.resize(w, h);
-    g_app.lay = chrome_layout(w, h);
+    const Theme *theme = active_theme();
+    g_app.lay = chrome_layout(w, h, theme, g_app.focused);
 
     paint_chrome(cv, g_app.lay, "TE: Untitled", g_app.focused, g_app.hot_box,
-                 g_app.pressed_box);
+                 g_app.pressed_box, theme);
     paint_content(cv, g_app.lay);
-    paint_grip(cv, g_app.lay.grip, g_app.focused);
+    paint_grip(cv, g_app.lay.grip, g_app.focused, theme);
     paint_dropdown(cv);
 }
 
@@ -278,9 +336,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     int i = (y - g_app.dropdown.y - 2) / g_app.item_h;
                     int m = g_app.open_menu;
                     g_app.open_menu = -1;
-                    if (i >= 0 && i < menu_item_count(m) && m == 0 &&
-                        (i == 4 || i == 5))
-                        DestroyWindow(hwnd); // Close / Quit
+                    if (i >= 0 && i < menu_item_count(m)) {
+                        if (m == 0 && (i == 4 || i == 5))
+                            DestroyWindow(hwnd); // Close / Quit
+                        else if (m == 4)
+                            select_theme(i);
+                    }
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
@@ -327,7 +388,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                  y >= g_app.lay.window.h - kBorder)) {
                 SendMessage(hwnd, WM_SYSCOMMAND, SC_SIZE + 8 /*bottomright*/,
                             lp);
-            } else if (y < kTitleH) {
+            } else if (y < g_app.lay.title_h) {
                 SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2 /*via mouse*/,
                             lp);
             }
@@ -435,6 +496,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 } // namespace
 
 int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
+    discover_haps();
+
     WNDCLASSA wc{};
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = hinst;

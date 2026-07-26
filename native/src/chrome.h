@@ -52,21 +52,78 @@ struct ChromeLayout {
     Rect window;
     Rect client;
     Rect close_box;
-    Rect hatch_box;
+    Rect hatch_box; // w == 0 when the theme supplies button art
     Rect max_box;
     Rect min_box;
     Rect grip;
+    int title_h = kTitleH;
 };
 
-inline ChromeLayout chrome_layout(int w, int h) {
+// Pick a themed chrome image: focus variant when focused, else normal,
+// falling back to whichever exists.
+inline const ThemeImage *chrome_art(const Theme *theme, int normal, int focus,
+                                    bool focused) {
+    if (!theme) return nullptr;
+    const ThemeImage *img = theme->image(focused ? focus : normal);
+    return img ? img : theme->image(normal);
+}
+
+inline ChromeLayout chrome_layout(int w, int h, const Theme *theme = nullptr,
+                                  bool focused = true) {
     ChromeLayout lay;
     lay.window = {0, 0, w, h};
-    lay.client = {kBorder, kTitleH, w - 2 * kBorder, h - kTitleH - kBorder};
-    lay.close_box = {5, kBtnTop, kBtn, kBtn};
-    lay.hatch_box = {lay.close_box.right() + 9, kBtnTop, 32, kBtn};
-    lay.min_box = {lay.client.right() - kBtn, kBtnTop, kBtn, kBtn};
-    lay.max_box = {lay.min_box.x - 4 - kBtn, kBtnTop, kBtn, kBtn};
-    lay.grip = {w - 1 - kGrip, h - 1 - kGrip, kGrip, kGrip};
+
+    // Frame thickness: the frame art's position metadata when present,
+    // Standard metrics otherwise.
+    const ThemeImage *frame =
+        chrome_art(theme, SlotWindowFrameNormal, SlotWindowFrameFocus, focused);
+    int bl = kBorder, bt = kTitleH, br = kBorder, bb = kBorder;
+    if (frame) {
+        bl = frame->positions[0];
+        bt = frame->positions[1];
+        br = frame->positions[2];
+        bb = frame->positions[3];
+    }
+    lay.title_h = bt;
+    lay.client = {bl, bt, w - bl - br, h - bt - bb};
+
+    // Buttons: anchored by their own position metadata when art exists
+    // (left offset when pos_left > 0, else offset from the right edge).
+    const ThemeImage *close_img = chrome_art(theme, SlotWindowCloseNormal,
+                                             SlotWindowCloseFocus, focused);
+    const ThemeImage *max_img = chrome_art(theme, SlotWindowMaximizeNormal,
+                                           SlotWindowMaximizeFocus, focused);
+    const ThemeImage *min_img = chrome_art(theme, SlotWindowMinimizeNormal,
+                                           SlotWindowMinimizeFocus, focused);
+    auto place = [&](const ThemeImage *img) -> Rect {
+        if (!img) return {0, 0, 0, 0};
+        int x = img->positions[0] > 0 ? img->positions[0]
+                                      : w - img->positions[2] - img->w;
+        int y = img->positions[1] > 1 ? img->positions[1] : 2;
+        return {x, y, img->w, img->h};
+    };
+    if (close_img || max_img || min_img) {
+        lay.close_box = place(close_img);
+        lay.max_box = place(max_img);
+        lay.min_box = place(min_img);
+        lay.hatch_box = {0, 0, 0, 0};
+    } else {
+        lay.close_box = {5, kBtnTop, kBtn, kBtn};
+        lay.hatch_box = {lay.close_box.right() + 9, kBtnTop, 32, kBtn};
+        lay.min_box = {lay.client.right() - kBtn, kBtnTop, kBtn, kBtn};
+        lay.max_box = {lay.min_box.x - 4 - kBtn, kBtnTop, kBtn, kBtn};
+    }
+
+    const ThemeImage *resize = chrome_art(theme, SlotWindowResizeNormal,
+                                          SlotWindowResizeFocus, focused);
+    if (resize) {
+        int px = resize->positions[2] > 0 ? resize->positions[2] : 1;
+        int py = resize->positions[3] > 0 ? resize->positions[3] : 1;
+        lay.grip = {w - px - resize->w, h - py - resize->h, resize->w,
+                    resize->h};
+    } else {
+        lay.grip = {w - 1 - kGrip, h - 1 - kGrip, kGrip, kGrip};
+    }
     return lay;
 }
 
@@ -93,11 +150,40 @@ inline void diagonal_hatch(Canvas &cv, Rect r, Color c) {
             }
 }
 
-// The whole Standard frame: slab, gradient, lighting, client cutout, boxes.
+// The whole frame. Per the kit contract each piece paints .hap art when the
+// theme provides it and the KDX Standard primitive otherwise.
 inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
-                         bool focused, int hot_box, int pressed_box) {
+                         bool focused, int hot_box, int pressed_box,
+                         const Theme *theme = nullptr) {
     Rect win = lay.window;
     Rect client = lay.client;
+
+    const ThemeImage *frame =
+        chrome_art(theme, SlotWindowFrameNormal, SlotWindowFrameFocus, focused);
+    if (frame) {
+        cv.nine_slice(*frame, win);
+        int tw = cv.text_width(title);
+        cv.text((win.w - tw) / 2, (lay.title_h - kFontHeight) / 2, title,
+                focused ? kWhite : kGlyphGrey);
+        auto paint_btn = [&](Rect r, int normal, int focus, int hilited,
+                             bool pressed) {
+            if (r.w == 0) return;
+            const ThemeImage *img =
+                pressed ? theme->image(hilited) : nullptr;
+            if (!img) img = chrome_art(theme, normal, focus, focused);
+            if (img) cv.nine_slice(*img, r);
+        };
+        paint_btn(lay.close_box, SlotWindowCloseNormal, SlotWindowCloseFocus,
+                  SlotWindowCloseHilited, pressed_box == 1);
+        paint_btn(lay.max_box, SlotWindowMaximizeNormal,
+                  SlotWindowMaximizeFocus, SlotWindowMaximizeHilited,
+                  pressed_box == 3);
+        paint_btn(lay.min_box, SlotWindowMinimizeNormal,
+                  SlotWindowMinimizeFocus, SlotWindowMinimizeHilited,
+                  pressed_box == 4);
+        (void)hot_box;
+        return;
+    }
     Rect slab = {1, 1, win.w - 2, win.h - 2};
 
     // Unfocused, the whole chrome goes greyscale like the real thing.
@@ -156,8 +242,16 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     (void)hot_box;
 }
 
-// The lower-right grow box: a red plate merging into the frame corner.
-inline void paint_grip(Canvas &cv, Rect g, bool focused) {
+// The lower-right grow box: themed resize art, or the Standard red plate
+// merging into the frame corner.
+inline void paint_grip(Canvas &cv, Rect g, bool focused,
+                       const Theme *theme = nullptr) {
+    const ThemeImage *img = chrome_art(theme, SlotWindowResizeNormal,
+                                       SlotWindowResizeFocus, focused);
+    if (img) {
+        cv.nine_slice(*img, g);
+        return;
+    }
     ChromeColors cc = chrome_colors(focused);
     cv.fill(g, cc.body);
     cv.hline(g.x, g.right(), g.y, kBlack);
