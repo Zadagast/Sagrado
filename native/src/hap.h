@@ -43,6 +43,8 @@ enum Slot : int {
     SlotWindowMenuFocus = 239,
     SlotWindowResizeNormal = 243,
     SlotWindowResizeFocus = 244,
+    SlotColumnHeaderNormal = 150,
+    SlotColumnHeaderHilited = 151,
     SlotVScrollDoubleArrows = 181,
     SlotVScrollIndicatorNormal = 185,
     SlotVScrollGripsNormal = 188,

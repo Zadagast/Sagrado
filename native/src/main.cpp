@@ -129,11 +129,30 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect strip{c.x, menu.bottom(), c.w, kTabH};
     raised_bar(cv, strip, uc);
     Rect tab{strip.x + 4, strip.y + 4, 108, 24};
-    bevel_box(cv, tab, false);
+    // Active tab plate: the theme's column-header art when present, its
+    // hilite colors when themed, the Standard red bevel otherwise.
+    const ThemeImage *tab_art =
+        theme ? theme->image(SlotColumnHeaderHilited) : nullptr;
+    if (!tab_art && theme) tab_art = theme->image(SlotColumnHeaderNormal);
+    Color tab_text = kWhite;
+    if (tab_art) {
+        cv.nine_slice(*tab_art, tab);
+        tab_text = uc.text;
+    } else if (theme && theme->has_colors) {
+        cv.fill(tab, uc.hilite);
+        cv.frame(tab, kBlack);
+        cv.hline(tab.x + 1, tab.right() - 1, tab.y + 1, uc.bar_light);
+        cv.vline(tab.x + 1, tab.y + 1, tab.bottom() - 1, uc.bar_light);
+        cv.hline(tab.x + 1, tab.right() - 1, tab.bottom() - 2, uc.bar_dark);
+        cv.vline(tab.right() - 2, tab.y + 1, tab.bottom() - 1, uc.bar_dark);
+        tab_text = uc.hilite_text;
+    } else {
+        bevel_box(cv, tab, false);
+    }
     // Save-state square icon, then the document name.
     cv.fill({tab.x + 8, tab.y + 7, 10, 10}, Color{186, 118, 118});
     cv.frame({tab.x + 8, tab.y + 7, 10, 10}, kDeep);
-    cv.text(tab.x + 24, tab.y + 4, "Untitled", kWhite);
+    cv.text(tab.x + 24, tab.y + 4, "Untitled", tab_text);
 
     // Editor area: black, scrollable sample document.
     Rect editor{c.x, strip.bottom(), c.w - kScrollbar,
@@ -192,27 +211,45 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect sb{c.right() - kScrollbar + 1, editor.y, kScrollbar,
             g_app.lay.grip.y - editor.y};
     g_app.sb = sb;
-    cv.fill(sb, uc.track);
-    cv.frame(sb, kBlack);
-    // Arrow boxes: a dec+inc pair at each end.
-    auto arrow_box = [&](int y0, int h, bool up) {
-        Rect b{sb.x, y0, sb.w, h};
-        cv.fill(b, uc.thumb);
-        cv.frame(b, kBlack);
-        cv.hline(b.x + 1, b.right() - 1, b.y + 1, uc.thumb_hi);
-        cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, uc.thumb_hi);
-        int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-        for (int i = 0; i < 4; ++i) {
-            int w = up ? i : 3 - i;
-            cv.hline(cx - w, cx + w + 1, cy - 2 + i, uc.text);
-        }
-        return b;
-    };
-    int ah = 13;
-    g_app.up1 = arrow_box(sb.y, ah, true);
-    g_app.dn1 = arrow_box(sb.y + ah - 1, ah, false);
-    g_app.up2 = arrow_box(sb.bottom() - 2 * ah + 1, ah, true);
-    g_app.dn2 = arrow_box(sb.bottom() - ah, ah, false);
+    // Scrollbar body: the theme's double-arrows art is the whole bar
+    // (arrow pairs baked into its caps, travel bounds in its positions).
+    const ThemeImage *bar_art =
+        theme ? theme->image(SlotVScrollDoubleArrows) : nullptr;
+    if (bar_art) {
+        cv.nine_slice(*bar_art, sb);
+        int top_zone = bar_art->positions[1] > 0 ? bar_art->positions[1]
+                                                 : bar_art->caps[1];
+        int bot_zone = bar_art->positions[3] > 0 ? bar_art->positions[3]
+                                                 : bar_art->caps[3];
+        int half_t = top_zone / 2, half_b = bot_zone / 2;
+        g_app.up1 = {sb.x, sb.y, sb.w, half_t};
+        g_app.dn1 = {sb.x, sb.y + half_t, sb.w, top_zone - half_t};
+        g_app.up2 = {sb.x, sb.bottom() - bot_zone, sb.w, half_b};
+        g_app.dn2 = {sb.x, sb.bottom() - bot_zone + half_b, sb.w,
+                     bot_zone - half_b};
+    } else {
+        cv.fill(sb, uc.track);
+        cv.frame(sb, kBlack);
+        // Arrow boxes: a dec+inc pair at each end.
+        auto arrow_box = [&](int y0, int h, bool up) {
+            Rect b{sb.x, y0, sb.w, h};
+            cv.fill(b, uc.thumb);
+            cv.frame(b, kBlack);
+            cv.hline(b.x + 1, b.right() - 1, b.y + 1, uc.thumb_hi);
+            cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, uc.thumb_hi);
+            int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+            for (int i = 0; i < 4; ++i) {
+                int w = up ? i : 3 - i;
+                cv.hline(cx - w, cx + w + 1, cy - 2 + i, uc.text);
+            }
+            return b;
+        };
+        int ah = 13;
+        g_app.up1 = arrow_box(sb.y, ah, true);
+        g_app.dn1 = arrow_box(sb.y + ah - 1, ah, false);
+        g_app.up2 = arrow_box(sb.bottom() - 2 * ah + 1, ah, true);
+        g_app.dn2 = arrow_box(sb.bottom() - ah, ah, false);
+    }
     // Thumb, positioned from the scroll state.
     Rect track{sb.x, g_app.dn1.bottom() - 1, sb.w,
                g_app.up2.y - g_app.dn1.bottom() + 2};
