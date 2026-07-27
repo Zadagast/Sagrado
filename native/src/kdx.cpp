@@ -15,6 +15,8 @@
 #include "chrome.h"
 #include "controls.h"
 #include "kdx_art.h"
+#include "host_room.h"
+#include "tracker.h"
 
 namespace {
 
@@ -62,59 +64,11 @@ HINSTANCE g_hinst = nullptr;
 
 // --- Tracker window ------------------------------------------------------
 // Modeled on the real KDX tracker: a groups table on top, the selected
-// group's server list below. Sample data until the Cloudflare tracker
-// backend is wired in.
+// group's server list below. The rows come from the Sagrado tracker (a
+// Cloudflare Worker); see tracker.h.
 
-struct TrackerGroup {
-    const char *name;
-};
-
-struct TrackerServer {
-    const char *group;
-    const char *name;
-    int users;
-    const char *date;
-    const char *desc;
-};
-
-const TrackerGroup kGroups[] = {
-    {"Business"}, {"Chat"},     {"Education"}, {"Games"},
-    {"General"},  {"Macintosh"}, {"Trackers"},  {"Windows"},
-};
-constexpr int kGroupCount = 8;
-
-const TrackerServer kServers[] = {
-    {"General", "Loophole's Lair", 5, "26/07/08 09:26 PM", ""},
-    {"General", "Skynet", 3, "26/05/05 10:17 AM", "..."},
-    {"General", "higher intellect", 7, "26/05/05 10:17 AM",
-     "750,000+ text files :: old/rare software archive"},
-    {"General", "Faceless Server", 2, "26/07/12 04:02 PM",
-     "[Storage for the afterworld]  Private German Server"},
-    {"General", "Inverted Reality", 10, "26/05/05 10:17 AM",
-     "kdx.inverted.be"},
-    {"General", "stickytack", 6, "26/07/14 12:27 PM",
-     "kdx.stickytack.com  |  The best server on KDX since before 2004!"},
-    {"General", "Merlin", 6, "26/05/05 10:17 AM",
-     "New DynIP - 18 TB - Since 2000 -> German/English MAC, PC, Games"},
-    {"General", "thE qUAntUm wOrmhOlE", 2, "26/05/16 04:36 AM",
-     "Retro Computing Archive, contributing to the BBS and KDX community"},
-    {"General", "i.c.e.d.t.r.i.p 2", 0, "26/05/05 10:20 AM",
-     "Sapere aude, stw."},
-    {"General", "Cliphoff", 10, "26/05/05 10:23 AM",
-     "SERVER 38.2 TB FILES ONLINE - Film ITA, Serie TV ITA - App, Game OSX"},
-    {"General", "Darths Taco Hut", 1, "26/07/04 05:39 PM",
-     "This That And The Other. Server = Awesome! OS = XUbuntu"},
-    {"General", "Loophole's Annex", 2, "26/07/09 11:02 AM", "Overflow room."},
-    {"General", "The Back Room", 4, "26/07/11 06:45 PM", "Quiet corner."},
-    {"General", "Longhaul", 8, "26/07/13 09:14 AM", "Big pipes, big files."},
-    {"Chat", "The Lobby", 12, "26/07/20 08:00 PM", "Come hang out."},
-    {"Chat", "Night Owls", 4, "26/07/18 02:11 AM", "Late night chat."},
-    {"Games", "Retro Arcade", 3, "26/07/01 05:39 PM",
-     "Abandonware and high scores."},
-    {"Macintosh", "Major Mac Backup", 1, "26/05/05 10:17 AM",
-     "Your Archiving Resource"},
-};
-constexpr int kServerCount = int(sizeof(kServers) / sizeof(kServers[0]));
+using tracker::kGroupNames;
+constexpr int kGroupCount = tracker::kGroupCount;
 
 constexpr int kTrkW = 900, kTrkH = 600;
 constexpr int kPaneInset = 8;  // window margin + the pane's focus ring
@@ -340,8 +294,19 @@ const Column kServerCols[] = {{"Server Name", 200, false},
                               {"Server Description", 700, false}};
 constexpr int kServerColCount = 4;
 
+// A scoped CRITICAL_SECTION guard for the fetched directory.
+struct Lock {
+    CRITICAL_SECTION &cs;
+    explicit Lock(CRITICAL_SECTION &c) : cs(c) { EnterCriticalSection(&cs); }
+    ~Lock() { LeaveCriticalSection(&cs); }
+};
+
+constexpr UINT WM_TRACKER = WM_APP + 1;  // a fetch finished
+
 struct TrackerWnd {
     HWND hwnd = nullptr;
+    tracker::Directory dir, pending;
+    CRITICAL_SECTION mutex{};
     Canvas canvas;
     bool focused = true;
     int pressed_box = 0;
@@ -356,18 +321,44 @@ struct TrackerWnd {
 
 int servers_in_group(const char *g) {
     int n = 0;
-    for (int i = 0; i < kServerCount; ++i)
-        if (lstrcmpA(kServers[i].group, g) == 0) ++n;
+    for (const tracker::Room &r : g_tracker.dir.rooms)
+        if (r.group == g) ++n;
     return n;
 }
 
-// Indices of the servers listed under the selected group.
-int group_server_indices(int out[kServerCount]) {
-    const char *g = kGroups[g_tracker.sel_group].name;
-    int n = 0;
-    for (int i = 0; i < kServerCount; ++i)
-        if (lstrcmpA(kServers[i].group, g) == 0) out[n++] = i;
-    return n;
+// Indices of the rooms listed under the selected group.
+std::vector<int> group_server_indices() {
+    std::vector<int> out;
+    const char *g = kGroupNames[g_tracker.sel_group];
+    for (size_t i = 0; i < g_tracker.dir.rooms.size(); ++i)
+        if (g_tracker.dir.rooms[i].group == g) out.push_back(int(i));
+    return out;
+}
+
+// One directory fetch, off the UI thread; the window redraws on WM_TRACKER.
+DWORD WINAPI fetch_thread(LPVOID) {
+    std::string body;
+    tracker::Directory dir;
+    if (net::request(tracker::base_url() + "/rooms", "", body) &&
+        tracker::parse(body, dir)) {
+        dir.status = tracker::Ready;
+    } else {
+        dir.status = tracker::Failed;
+        dir.error = "Could not reach " + tracker::base_url();
+    }
+    {
+        Lock lock(g_tracker.mutex);
+        g_tracker.pending = dir;
+    }
+    if (g_tracker.hwnd) PostMessage(g_tracker.hwnd, WM_TRACKER, 0, 0);
+    return 0;
+}
+
+void refresh_tracker() {
+    if (g_tracker.dir.status == tracker::Fetching) return;
+    g_tracker.dir.status = tracker::Fetching;
+    if (HANDLE t = CreateThread(nullptr, 0, fetch_thread, nullptr, 0, nullptr))
+        CloseHandle(t);
 }
 
 void paint_tracker() {
@@ -408,15 +399,15 @@ void paint_tracker() {
             cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
-        wsprintfA(cnt, "%d", servers_in_group(kGroups[i].name));
+        wsprintfA(cnt, "%d", servers_in_group(kGroupNames[i]));
         draw_cell(cv, gp.col_x(kGroupCols, 0), kGroupCols[0].w, ty, cnt, true);
         draw_cell(cv, gp.col_x(kGroupCols, 1), kGroupCols[1].w, ty,
-                  kGroups[i].name, false);
+                  kGroupNames[i], false);
     }
     cv.clear_clip();
 
-    int idx[kServerCount];
-    int n = group_server_indices(idx);
+    std::vector<int> idx = group_server_indices();
+    int n = int(idx.size());
     // The pane runs to the same margin all round; the grow box, painted
     // last, notches its bottom-right corner exactly like the real tracker.
     sp.r = {cl.x + kPaneInset, gp.r.bottom() + 9, cl.w - 2 * kPaneInset,
@@ -430,21 +421,38 @@ void paint_tracker() {
     cv.set_clip(sp.body);
     for (int i = sp.vsb.value; i < n && sp.row_rect(i).y < sp.body.bottom();
          ++i) {
-        const TrackerServer &s = kServers[idx[i]];
+        const tracker::Room &s2 = g_tracker.dir.rooms[idx[i]];
         Rect row = sp.row_rect(i);
         if (idx[i] == g_tracker.sel_server)
             cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
-        wsprintfA(cnt, "%d", s.users);
-        draw_cell(cv, sp.col_x(kServerCols, 0), kServerCols[0].w, ty, s.name,
-                  false);
+        wsprintfA(cnt, "%d", s2.users);
+        draw_cell(cv, sp.col_x(kServerCols, 0), kServerCols[0].w, ty,
+                  s2.name.c_str(), false);
         draw_cell(cv, sp.col_x(kServerCols, 1), kServerCols[1].w, ty, cnt,
                   true);
-        draw_cell(cv, sp.col_x(kServerCols, 2), kServerCols[2].w, ty, s.date,
-                  false);
-        draw_cell(cv, sp.col_x(kServerCols, 3), kServerCols[3].w, ty, s.desc,
-                  false);
+        draw_cell(cv, sp.col_x(kServerCols, 2), kServerCols[2].w, ty,
+                  s2.date.c_str(), false);
+        draw_cell(cv, sp.col_x(kServerCols, 3), kServerCols[3].w, ty,
+                  s2.description.c_str(), false);
+    }
+    // While the directory is in flight (or unreachable) the list says so,
+    // exactly where the rows would be.
+    if (n == 0) {
+        const char *msg = nullptr;
+        std::string err;
+        switch (g_tracker.dir.status) {
+            case tracker::Fetching: msg = "Connecting to tracker..."; break;
+            case tracker::Failed:
+                err = g_tracker.dir.error;
+                msg = err.c_str();
+                break;
+            case tracker::Ready: msg = "No servers in this group."; break;
+            default: msg = "";
+        }
+        cv.text(sp.body.x + 6, sp.body.y + (kRowH - kFontHeight) / 2 + 1, msg,
+                kGlyph);
     }
     cv.clear_clip();
     paint_grip(cv, lay.grip, focused, nullptr);
@@ -500,8 +508,8 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (g_tracker.servers.body.contains(x, y)) {
                 g_tracker.focus_pane = 1;
-                int idx[kServerCount];
-                int n = group_server_indices(idx);
+                std::vector<int> idx = group_server_indices();
+                int n = int(idx.size());
                 int row = g_tracker.servers.row_at(y);
                 g_tracker.sel_server = (row >= 0 && row < n) ? idx[row] : -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -515,6 +523,18 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_SIZE:
             InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_TRACKER: {
+            {
+                Lock lock(g_tracker.mutex);
+                g_tracker.dir = g_tracker.pending;
+            }
+            g_tracker.sel_server = -1;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_TIMER:
+            refresh_tracker();
             return 0;
         case WM_MOUSEMOVE:
             if (g_tracker.drag) {
@@ -554,6 +574,7 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+            if (wp == VK_F5) refresh_tracker();
             return 0;
         case WM_ACTIVATE:
         case WM_SETFOCUS:
@@ -585,6 +606,7 @@ void open_tracker(HINSTANCE hinst) {
     }
     static bool registered = false;
     if (!registered) {
+        InitializeCriticalSection(&g_tracker.mutex);
         WNDCLASSA wc{};
         wc.lpfnWndProc = tracker_proc;
         wc.hInstance = hinst;
@@ -600,6 +622,155 @@ void open_tracker(HINSTANCE hinst) {
                                      g_main, nullptr, hinst, nullptr);
     ShowWindow(g_tracker.hwnd, SW_SHOW);
     SetForegroundWindow(g_tracker.hwnd);
+    refresh_tracker();
+    SetTimer(g_tracker.hwnd, 1, 30000, nullptr);  // keep the list fresh
+}
+
+// ---- Host a Room ----
+
+LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    host_room::Window &g = host_room::g;
+    switch (msg) {
+        case WM_NCCALCSIZE:
+            if (wp) return 0;
+            break;
+        case WM_NCHITTEST:
+            return HTCLIENT;
+        case WM_LBUTTONDOWN: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (g.lay.close_box.contains(x, y)) {
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            for (int i = 0; i < 3; ++i)
+                if (g.field[i].contains(x, y)) {
+                    g.focus = i;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            if (g.group_box.contains(x, y) && !g.hosting.active) {
+                g.group = (g.group + 1) % kGroupCount;  // cycles the groups
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (g.action.contains(x, y) || g.close.contains(x, y)) {
+                g.pressed_btn = g.action.contains(x, y) ? 0 : 1;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (y < g.lay.title_h)
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (g.pressed_btn >= 0) {
+                ReleaseCapture();
+                int was = g.pressed_btn;
+                g.pressed_btn = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                if (was == 0 && g.action.contains(x, y)) {
+                    if (g.hosting.active)
+                        host_room::stop_hosting();
+                    else
+                        host_room::start_hosting();
+                } else if (was == 1 && g.close.contains(x, y)) {
+                    DestroyWindow(hwnd);
+                }
+            }
+            return 0;
+        }
+        case WM_CHAR: {
+            if (g.hosting.active) return 0;
+            std::string &t = *host_room::focused_text();
+            char c = char(wp);
+            if (c == '\b') {
+                if (!t.empty()) t.pop_back();
+            } else if (c == '\t') {
+                g.focus = (g.focus + 1) % 3;
+            } else if (c == '\r') {
+                host_room::start_hosting();
+            } else if (c >= 32 && c < 127 && t.size() < 120) {
+                if (g.focus != 2 || (c >= '0' && c <= '9')) t += c;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+            return 0;
+        case host_room::WM_HOST_DONE:
+            g.busy = false;
+            if (wp) {
+                char buf[160];
+                wsprintfA(buf, "Listed on the tracker on port %d.",
+                          g.hosting.port);
+                g.status = buf;
+                SetTimer(hwnd, 2, 30000, nullptr);  // heartbeat
+            } else {
+                g.status = g.error.empty() ? "Registration failed."
+                                           : g.error;
+            }
+            if (g_tracker.hwnd) refresh_tracker();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_TIMER:
+            if (wp == 2) {
+                tracker::heartbeat(g.hosting);
+            } else {
+                g.caret = !g.caret;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_ACTIVATE:
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            host_room::paint();
+            blit_canvas(hdc, g.canvas);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_DESTROY:
+            // Hosting outlives the window; the launcher keeps the heartbeat.
+            g.hwnd = nullptr;
+            if (g_main) SetForegroundWindow(g_main);
+            return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+void open_host_room(HINSTANCE hinst) {
+    host_room::Window &g = host_room::g;
+    if (g.hwnd) {
+        SetForegroundWindow(g.hwnd);
+        return;
+    }
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSA wc{};
+        wc.lpfnWndProc = host_proc;
+        wc.hInstance = hinst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = "SagradoHostRoom";
+        RegisterClassA(&wc);
+        registered = true;
+    }
+    RECT mr{};
+    if (g_main) GetWindowRect(g_main, &mr);
+    g.hwnd = CreateWindowExA(0, "SagradoHostRoom", "Host a Room", WS_POPUP,
+                             mr.right + 12, mr.top + 40, host_room::kW,
+                             host_room::kH, g_main, nullptr, hinst, nullptr);
+    ShowWindow(g.hwnd, SW_SHOW);
+    SetForegroundWindow(g.hwnd);
+    SetTimer(g.hwnd, 1, 500, nullptr);  // caret blink
 }
 
 void blit_art(Canvas &cv, const ArtImage &a, int dx = 0, int dy = 0) {
@@ -711,6 +882,10 @@ void run_command(int i, HWND hwnd) {
     }
     if (lstrcmpA(name, "Connect...") == 0) {
         open_tracker(g_hinst);
+        return;
+    }
+    if (lstrcmpA(name, "Commands") == 0) {
+        open_host_room(g_hinst);  // the Commands menu starts with hosting
         return;
     }
     // Remaining commands come online one at a time.

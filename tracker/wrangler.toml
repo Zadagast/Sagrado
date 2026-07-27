@@ -1,0 +1,11 @@
+name = "sagrado-tracker"
+main = "src/index.ts"
+compatibility_date = "2025-07-01"
+
+[[durable_objects.bindings]]
+name = "REGISTRY"
+class_name = "Registry"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Registry"]
