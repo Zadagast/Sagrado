@@ -375,7 +375,7 @@ void paint_tracker() {
     bool focused = GetForegroundWindow() == g_tracker.hwnd;
     g_tracker.focused = focused;
 
-    ChromeLayout lay = chrome_layout(w, h, nullptr, focused);
+    ChromeLayout lay = chrome_layout(w, h, settings::active_theme(), focused);
     lay.max_box = {0, 0, 0, 0};
     g_tracker.lay = lay;
     paint_chrome(cv, lay, "Tracker: Sagrado Tracker", focused, 0,
@@ -801,12 +801,16 @@ void open_host_room(HINSTANCE hinst) {
 // Identity + Appearance pages matching the real Haxial KDX Settings dialog.
 
 void invalidate_all_windows() {
-    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
-    if (g_tracker.hwnd) InvalidateRect(g_tracker.hwnd, nullptr, FALSE);
-    if (host_room::g.hwnd) InvalidateRect(host_room::g.hwnd, nullptr, FALSE);
-    if (settings::g.hwnd) InvalidateRect(settings::g.hwnd, nullptr, FALSE);
-    if (HWND w = FindWindowA("SagradoServer", nullptr))
+    auto bump = [](HWND w) {
+        if (!w) return;
         InvalidateRect(w, nullptr, FALSE);
+        UpdateWindow(w);
+    };
+    bump(g_main);
+    bump(g_tracker.hwnd);
+    bump(host_room::g.hwnd);
+    bump(settings::g.hwnd);
+    bump(FindWindowA("SagradoServer", nullptr));
 }
 
 LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -949,6 +953,7 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 else if (idx <= int(settings::g_theme.hap_names.size()))
                     settings::g_draft.theme_name =
                         settings::g_theme.hap_names[idx - 1];
+                settings::preview_draft_theme();
             } else if (kind == 1 && idx >= 0 &&
                        idx < int(settings::g_pick.colors.size())) {
                 uint32_t c = settings::g_pick.colors[idx];
@@ -956,8 +961,8 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     settings::g_draft.fg = c;
                 else
                     settings::g_draft.bg = c;
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
-            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         case WM_CHAR: {
@@ -1002,6 +1007,13 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_DESTROY:
             settings::close_picker();
+            // X / Esc go through cancel_and_close; if the window dies another
+            // way, still drop an uncommitted preview.
+            if (settings::g_draft.theme_name != settings::g_prefs.theme_name ||
+                settings::g_draft.nick != settings::g_prefs.nick ||
+                settings::g_draft.fg != settings::g_prefs.fg ||
+                settings::g_draft.bg != settings::g_prefs.bg)
+                settings::discard_unapplied();
             g.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
             return 0;
@@ -1151,7 +1163,7 @@ void paint_server() {
     if (cv.width() != rc.right || cv.height() != rc.bottom)
         cv.resize(rc.right, rc.bottom);
     bool focused = GetForegroundWindow() == s.hwnd;
-    s.lay = chrome_layout(rc.right, rc.bottom, nullptr, focused);
+    s.lay = chrome_layout(rc.right, rc.bottom, settings::active_theme(), focused);
     s.lay.max_box = {0, 0, 0, 0};
 
     std::string name = room::name_copy();
@@ -1202,7 +1214,7 @@ void paint_server() {
     s.chat_sb.paint(cv);
 
     // Each user gets a row of their own colours, with their icon beside the
-    // name (one icon for everyone until Settings can set it).
+    // name (icon art comes from Settings later; one shared mark for now).
     std::vector<room::User> users = room::user_copy();
     int seats = (s.users.h - 4) / kUserRowH;
     s.user_sb.vertical = true;
@@ -1543,7 +1555,7 @@ void repaint(HWND hwnd) {
     if (w <= 0 || h <= 0) return;
     Canvas &cv = g_app.canvas;
     if (cv.width() != w || cv.height() != h) cv.resize(w, h);
-    g_app.lay = chrome_layout(w, h, nullptr, g_app.focused);
+    g_app.lay = chrome_layout(w, h, settings::active_theme(), g_app.focused);
     g_app.lay.grip = {0, 0, 0, 0};      // fixed-size launcher: no grow box
     g_app.lay.close_box = {0, 0, 0, 0}; // real KDX main window shows only
     g_app.lay.hatch_box = {0, 0, 0, 0}; // the minimize box; Exit quits
@@ -1840,6 +1852,7 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     g_main = hwnd;
     room::init();
     settings::boot();
+    settings::invalidate_all = invalidate_all_windows;
     ShowWindow(hwnd, show);
     SetTimer(hwnd, 1, 250, nullptr);
     SetTimer(hwnd, 2, 30000, nullptr);

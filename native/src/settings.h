@@ -64,16 +64,22 @@ inline void discover_haps() {
     g_theme.hap_names.clear();
     g_theme.hap_paths.clear();
     std::string dir = exe_dir();
-    const char *cands[] = {"\\Appearances", "\\themes\\Appearances",
-                           "\\..\\themes\\Appearances",
-                           "\\..\\..\\themes\\Appearances"};
+    const char *cands[] = {
+        "\\Appearances",
+        "\\themes\\Appearances",
+        "\\..\\themes\\Appearances",
+        "\\..\\..\\themes\\Appearances",
+        "\\..\\..\\..\\themes\\Appearances",
+    };
     for (const char *c : cands) {
         std::string base = dir + c;
         WIN32_FIND_DATAA fd;
         HANDLE fh = FindFirstFileA((base + "\\*.hap").c_str(), &fd);
         if (fh == INVALID_HANDLE_VALUE) continue;
         do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             std::string name(fd.cFileName);
+            if (name.size() < 5) continue;
             g_theme.hap_paths.push_back(base + "\\" + name);
             g_theme.hap_names.push_back(name.substr(0, name.size() - 4));
         } while (FindNextFileA(fh, &fd));
@@ -82,6 +88,8 @@ inline void discover_haps() {
     }
 }
 
+// Load a theme into the live renderer only. Does not touch g_prefs — that
+// is Apply/Save's job, so closing Settings without Apply can revert.
 inline bool select_theme_by_index(int index) {
     g_theme.index = index;
     g_theme.themed = false;
@@ -90,11 +98,11 @@ inline bool select_theme_by_index(int index) {
         if (load_hap(g_theme.hap_paths[index - 1], t)) {
             g_theme.theme = std::move(t);
             g_theme.themed = true;
-            g_prefs.theme_name = g_theme.hap_names[index - 1];
             return true;
         }
+        g_theme.index = 0;
+        return false;
     }
-    g_prefs.theme_name = "Haxial Standard";
     return index == 0;
 }
 
@@ -215,7 +223,10 @@ inline Window g;
 inline void (*invalidate_all)() = nullptr;
 
 inline void request_redraw_all() {
-    if (g.hwnd) InvalidateRect(g.hwnd, nullptr, FALSE);
+    if (g.hwnd) {
+        InvalidateRect(g.hwnd, nullptr, FALSE);
+        UpdateWindow(g.hwnd);
+    }
     if (invalidate_all) invalidate_all();
 }
 
@@ -388,14 +399,31 @@ inline void paint() {
 
 inline void apply_draft(bool write_disk) {
     g_prefs = g_draft;
-    select_theme_by_name(g_prefs.theme_name);
+    if (!select_theme_by_name(g_prefs.theme_name)) {
+        g_prefs.theme_name = "Haxial Standard";
+        g_draft.theme_name = g_prefs.theme_name;
+        select_theme_by_index(0);
+    }
     apply_identity_to_session();
     if (write_disk) save_prefs();
     request_redraw_all();
 }
 
-inline void cancel_and_close() {
+// Live preview: skins the app as soon as a .hap is chosen. g_prefs is
+// untouched, so Cancel / close without Apply puts the previous theme back.
+inline void preview_draft_theme() {
+    select_theme_by_name(g_draft.theme_name);
+    request_redraw_all();
+}
+
+inline void discard_unapplied() {
     g_draft = g_prefs;
+    select_theme_by_name(g_prefs.theme_name);
+    request_redraw_all();
+}
+
+inline void cancel_and_close() {
+    discard_unapplied();
     if (g.hwnd) DestroyWindow(g.hwnd);
 }
 

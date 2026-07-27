@@ -44,7 +44,8 @@ inline std::string *focused_text() {
 }
 
 inline void layout(int w, int h) {
-    g.lay = chrome_layout(w, h, nullptr, GetForegroundWindow() == g.hwnd);
+    g.lay = chrome_layout(w, h, settings::active_theme(),
+                          GetForegroundWindow() == g.hwnd);
     g.lay.max_box = {0, 0, 0, 0};
     g.lay.grip = {0, 0, 0, 0};
     int lx = g.lay.client.x + 14, fx = lx + 96;
