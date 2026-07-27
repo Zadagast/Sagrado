@@ -60,6 +60,279 @@ struct App {
 HWND g_main = nullptr;
 HINSTANCE g_hinst = nullptr;
 
+// --- Tracker window ------------------------------------------------------
+// Modeled on the real KDX tracker: a groups table on top, the selected
+// group's server list below. Sample data until the Cloudflare tracker
+// backend is wired in.
+
+struct TrackerGroup {
+    const char *name;
+};
+
+struct TrackerServer {
+    const char *group;
+    const char *name;
+    int users;
+    const char *date;
+    const char *desc;
+};
+
+const TrackerGroup kGroups[] = {
+    {"Business"}, {"Chat"},     {"Education"}, {"Games"},
+    {"General"},  {"Macintosh"}, {"Trackers"},  {"Windows"},
+};
+constexpr int kGroupCount = 8;
+
+const TrackerServer kServers[] = {
+    {"General", "Loophole's Lair", 5, "26/07/08 09:26 PM", ""},
+    {"General", "Skynet", 3, "26/05/05 10:17 AM", "..."},
+    {"General", "higher intellect", 7, "26/05/05 10:17 AM",
+     "750,000+ text files :: old/rare software archive"},
+    {"General", "Faceless Server", 2, "26/07/12 04:02 PM",
+     "[Storage for the afterworld]  Private German Server"},
+    {"General", "Inverted Reality", 10, "26/05/05 10:17 AM",
+     "kdx.inverted.be"},
+    {"General", "stickytack", 6, "26/07/14 12:27 PM",
+     "kdx.stickytack.com  |  The best server on KDX since before 2004!"},
+    {"Chat", "The Lobby", 12, "26/07/20 08:00 PM", "Come hang out."},
+    {"Chat", "Night Owls", 4, "26/07/18 02:11 AM", "Late night chat."},
+    {"Games", "Retro Arcade", 3, "26/07/01 05:39 PM",
+     "Abandonware and high scores."},
+    {"Macintosh", "Major Mac Backup", 1, "26/05/05 10:17 AM",
+     "Your Archiving Resource"},
+};
+constexpr int kServerCount = int(sizeof(kServers) / sizeof(kServers[0]));
+
+struct TrackerWnd {
+    HWND hwnd = nullptr;
+    Canvas canvas;
+    bool focused = true;
+    int pressed_box = 0;
+    int sel_group = 4; // General
+    ChromeLayout lay{};
+    Rect group_rows[kGroupCount]{};
+} g_tracker;
+
+constexpr int kTrkW = 860, kTrkH = 560;
+constexpr int kRowH = 18, kHdrH = 17, kSbW = 13;
+
+void draw_list_header(Canvas &cv, Rect r, const char *cols[], const int w[],
+                      int n) {
+    // White-to-grey vertical gradient with dark labels, like the real one.
+    for (int y = 0; y < r.h; ++y) {
+        int v = 255 - (y * 60) / r.h;
+        cv.hline(r.x, r.right(), r.y + y, Color{uint8_t(v), uint8_t(v),
+                                                uint8_t(v)});
+    }
+    cv.frame(r, kBlack);
+    int x = r.x;
+    for (int i = 0; i < n; ++i) {
+        cv.text(x + 6, r.y + (r.h - kFontHeight) / 2 + 1, cols[i],
+                Color{51, 51, 51});
+        x += w[i];
+        if (i + 1 < n) cv.vline(x, r.y + 1, r.bottom() - 1, Color{136, 136, 136});
+    }
+}
+
+// A dead-simple KDX-style scrollbar gutter (inert until lists overflow).
+void draw_scroll_gutter(Canvas &cv, Rect r, bool vertical) {
+    cv.fill(r, Color{51, 51, 51});
+    cv.frame(r, kBlack);
+    Color a{136, 136, 136};
+    if (vertical) {
+        cv.fill({r.x + 3, r.y + 4, r.w - 6, 2}, a);
+        cv.fill({r.x + 3, r.y + 8, r.w - 6, 2}, a);
+        cv.fill({r.x + 3, r.bottom() - 6, r.w - 6, 2}, a);
+        cv.fill({r.x + 3, r.bottom() - 10, r.w - 6, 2}, a);
+    } else {
+        cv.fill({r.x + 4, r.y + 3, 2, r.h - 6}, a);
+        cv.fill({r.x + 8, r.y + 3, 2, r.h - 6}, a);
+        cv.fill({r.right() - 6, r.y + 3, 2, r.h - 6}, a);
+        cv.fill({r.right() - 10, r.y + 3, 2, r.h - 6}, a);
+    }
+}
+
+int servers_in_group(const char *g) {
+    int n = 0;
+    for (int i = 0; i < kServerCount; ++i)
+        if (lstrcmpA(kServers[i].group, g) == 0) ++n;
+    return n;
+}
+
+void paint_tracker() {
+    Canvas &cv = g_tracker.canvas;
+    RECT rc;
+    GetClientRect(g_tracker.hwnd, &rc);
+    int w = rc.right, h = rc.bottom;
+    if (w <= 0 || h <= 0) return;
+    if (cv.width() != w || cv.height() != h) cv.resize(w, h);
+    bool focused = GetForegroundWindow() == g_tracker.hwnd;
+    g_tracker.focused = focused;
+
+    ChromeLayout lay = chrome_layout(w, h, nullptr, focused);
+    lay.grip = {0, 0, 0, 0};
+    lay.max_box = {0, 0, 0, 0};
+    g_tracker.lay = lay;
+    paint_chrome(cv, lay, "Tracker: Sagrado Tracker", focused, 0,
+                 g_tracker.pressed_box == 5 ? 1 : 0, nullptr);
+
+    Rect cl = lay.client;
+    cv.fill(cl, Color{51, 51, 51});
+
+    Color row_a{68, 68, 68}, row_b{51, 51, 51};
+    Color sel_fill{102, 0, 0}, sel_frame{136, 0, 0};
+
+    // --- Groups pane -----------------------------------------------------
+    int top_h = kHdrH + kGroupCount * kRowH + kRowH * 2 + kSbW;
+    Rect gp{cl.x + 2, cl.y + 2, cl.w - 4, top_h};
+    const char *gcols[] = {"Count", "Group Name", "Description"};
+    int gw[] = {56, 200, gp.w - kSbW - 256};
+    draw_list_header(cv, {gp.x, gp.y, gp.w - kSbW, kHdrH}, gcols, gw, 3);
+    int y = gp.y + kHdrH;
+    for (int i = 0; i < kGroupCount; ++i) {
+        Rect row{gp.x, y, gp.w - kSbW, kRowH};
+        g_tracker.group_rows[i] = row;
+        bool sel = i == g_tracker.sel_group;
+        cv.fill(row, sel ? sel_fill : (i % 2 ? row_b : row_a));
+        if (sel) cv.frame(row, sel_frame);
+        char cnt[16];
+        wsprintfA(cnt, "%d", servers_in_group(kGroups[i].name));
+        int cw = cv.text_width(cnt);
+        int ty = y + (kRowH - kFontHeight) / 2 + 1;
+        cv.text(row.x + gw[0] - 8 - cw, ty, cnt, kWhite);
+        cv.text(row.x + gw[0] + 6, ty, kGroups[i].name, kWhite);
+        y += kRowH;
+    }
+    draw_scroll_gutter(cv, {gp.right() - kSbW, gp.y, kSbW, gp.h - kSbW}, true);
+    draw_scroll_gutter(cv, {gp.x, gp.bottom() - kSbW, gp.w - kSbW, kSbW},
+                       false);
+
+    // --- Servers pane ------------------------------------------------------
+    Rect sp{cl.x + 2, gp.bottom() + 6, cl.w - 4,
+            cl.bottom() - gp.bottom() - 8};
+    const char *scols[] = {"Server Name", "Users", "Date Online",
+                           "Server Description"};
+    int sw[] = {200, 52, 150, sp.w - kSbW - 402};
+    draw_list_header(cv, {sp.x, sp.y, sp.w - kSbW, kHdrH}, scols, sw, 4);
+    y = sp.y + kHdrH;
+    int row_i = 0;
+    const char *sel_name = kGroups[g_tracker.sel_group].name;
+    for (int i = 0; i < kServerCount && y + kRowH <= sp.bottom() - kSbW; ++i) {
+        if (lstrcmpA(kServers[i].group, sel_name) != 0) continue;
+        Rect row{sp.x, y, sp.w - kSbW, kRowH};
+        cv.fill(row, row_i % 2 ? row_b : row_a);
+        int ty = y + (kRowH - kFontHeight) / 2 + 1;
+        cv.text(row.x + 6, ty, kServers[i].name, kWhite);
+        char cnt[16];
+        wsprintfA(cnt, "%d", kServers[i].users);
+        cv.text(row.x + sw[0] + sw[1] - 8 - cv.text_width(cnt), ty, cnt,
+                kWhite);
+        cv.text(row.x + sw[0] + sw[1] + 6, ty, kServers[i].date, kWhite);
+        cv.text(row.x + sw[0] + sw[1] + sw[2] + 6, ty, kServers[i].desc,
+                kWhite);
+        y += kRowH;
+        ++row_i;
+    }
+    draw_scroll_gutter(cv, {sp.right() - kSbW, sp.y, kSbW, sp.h - kSbW},
+                       true);
+    draw_scroll_gutter(cv, {sp.x, sp.bottom() - kSbW, sp.w - kSbW, kSbW},
+                       false);
+}
+
+void blit_canvas(HDC hdc, const Canvas &cv);
+
+LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_NCCALCSIZE:
+            if (wp) return 0;
+            break;
+        case WM_NCHITTEST:
+            return HTCLIENT;
+        case WM_LBUTTONDOWN: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (g_tracker.lay.close_box.contains(x, y)) {
+                g_tracker.pressed_box = 5;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (g_tracker.lay.min_box.contains(x, y)) {
+                CloseWindow(hwnd);
+                return 0;
+            }
+            for (int i = 0; i < kGroupCount; ++i) {
+                if (g_tracker.group_rows[i].contains(x, y)) {
+                    g_tracker.sel_group = i;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+            if (y < g_tracker.lay.title_h)
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return 0;
+        }
+        case WM_LBUTTONUP:
+            if (g_tracker.pressed_box == 5) {
+                ReleaseCapture();
+                g_tracker.pressed_box = 0;
+                if (g_tracker.lay.close_box.contains(GET_X_LPARAM(lp),
+                                                     GET_Y_LPARAM(lp))) {
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+            return 0;
+        case WM_ACTIVATE:
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            paint_tracker();
+            blit_canvas(hdc, g_tracker.canvas);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_DESTROY:
+            g_tracker.hwnd = nullptr;
+            if (g_main) SetForegroundWindow(g_main);
+            return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+void open_tracker(HINSTANCE hinst) {
+    if (g_tracker.hwnd) {
+        SetForegroundWindow(g_tracker.hwnd);
+        return;
+    }
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSA wc{};
+        wc.lpfnWndProc = tracker_proc;
+        wc.hInstance = hinst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = "SagradoTracker";
+        RegisterClassA(&wc);
+        registered = true;
+    }
+    RECT mr{};
+    if (g_main) GetWindowRect(g_main, &mr);
+    g_tracker.hwnd = CreateWindowExA(0, "SagradoTracker", "Tracker", WS_POPUP,
+                                     mr.right + 12, mr.top, kTrkW, kTrkH,
+                                     g_main, nullptr, hinst, nullptr);
+    ShowWindow(g_tracker.hwnd, SW_SHOW);
+    SetForegroundWindow(g_tracker.hwnd);
+}
+
 void blit_art(Canvas &cv, const ArtImage &a, int dx = 0, int dy = 0) {
     for (int y = 0; y < a.h; ++y)
         for (int x = 0; x < a.w; ++x)
@@ -167,7 +440,11 @@ void run_command(int i, HWND hwnd) {
         DestroyWindow(hwnd);
         return;
     }
-    // Remaining commands come online one at a time; Connect... is next.
+    if (lstrcmpA(name, "Connect...") == 0) {
+        open_tracker(g_hinst);
+        return;
+    }
+    // Remaining commands come online one at a time.
     char msg[128];
     wsprintfA(msg, "\"%s\" is not wired up yet.", name);
     MessageBoxA(hwnd, msg, "Sagrado KDX", MB_OK);
