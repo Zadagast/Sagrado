@@ -21,7 +21,7 @@ inline DialogColors dialog_colors(const Theme *theme) {
             d1{128, 128, 128}, d2{64, 64, 64};
         return {Color{136, 0, 0}, kWhite,
                 kBlack,           Color{0, 204, 0},
-                kBright,          kWhite,
+                kDeep,            kBright,
                 g2,               g1,
                 gb,               d1,
                 d2,               kBlack,
@@ -49,38 +49,56 @@ inline DialogColors dialog_colors(const Theme *theme) {
             c(ColDefaultButtonLight + 3)};
 }
 
-// A sunken text field: framed box, focus ring when active, caret at the end
-// of the (single-line) contents.
+// A sunken text field: black box with a thin frame (a red focus outline
+// when active), and a red insertion caret after the contents.
 inline void draw_field(Canvas &cv, Rect r, const char *text, bool focused,
                         bool caret_on, const DialogColors &dc) {
     cv.fill(r, dc.field_bg);
-    cv.frame(r, focused ? dc.field_focus : dc.field_frame);
-    if (focused)
+    if (focused) {
+        cv.frame(r, dc.field_focus);
         cv.frame({r.x + 1, r.y + 1, r.w - 2, r.h - 2}, dc.field_focus);
+    } else {
+        cv.frame(r, dc.field_frame);
+    }
     int tx = r.x + 5;
     int ty = r.y + (r.h - kFontHeight) / 2;
     int end = cv.text(tx, ty, text, dc.field_fg);
-    if (focused && caret_on) cv.vline(end + 1, r.y + 3, r.bottom() - 3,
-                                      dc.field_fg);
+    if (focused && caret_on)
+        cv.vline(end + 1, r.y + 3, r.bottom() - 3, dc.field_focus);
 }
 
-// A raised push button with a centred label; the default button gets an
-// extra focus ring, and it depresses when pressed.
+// A frame with the 4 corner pixels cut to `bg`, giving Haxial's slightly
+// rounded button/edge look.
+inline void rounded_frame(Canvas &cv, Rect r, Color frame, Color bg) {
+    cv.hline(r.x + 1, r.right() - 1, r.y, frame);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 1, frame);
+    cv.vline(r.x, r.y + 1, r.bottom() - 1, frame);
+    cv.vline(r.right() - 1, r.y + 1, r.bottom() - 1, frame);
+    cv.put(r.x, r.y, pack(bg));
+    cv.put(r.right() - 1, r.y, pack(bg));
+    cv.put(r.x, r.bottom() - 1, pack(bg));
+    cv.put(r.right() - 1, r.bottom() - 1, pack(bg));
+}
+
+// A raised push button with a centred label and slightly rounded corners;
+// the default button gets an extra rounded ring, and it depresses when
+// pressed.
 inline void draw_button(Canvas &cv, Rect r, const char *label, bool pressed,
                         bool is_default, const DialogColors &dc) {
     if (is_default) {
-        cv.frame(r, dc.def_frame);
-        cv.frame({r.x + 1, r.y + 1, r.w - 2, r.h - 2}, dc.def_frame);
+        rounded_frame(cv, r, dc.def_frame, dc.workspace);
+        rounded_frame(cv, {r.x + 1, r.y + 1, r.w - 2, r.h - 2}, dc.def_frame,
+                      dc.workspace);
         r = {r.x + 3, r.y + 3, r.w - 6, r.h - 6};
     }
     cv.fill(r, dc.btn);
-    cv.frame(r, dc.btn_frame);
+    rounded_frame(cv, r, dc.btn_frame, dc.workspace);
     Color tl = pressed ? dc.btn_d2 : dc.btn_l2;
     Color br = pressed ? dc.btn_l2 : dc.btn_d2;
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, tl);
-    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, tl);
-    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, br);
-    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, br);
+    cv.hline(r.x + 2, r.right() - 2, r.y + 1, tl);
+    cv.vline(r.x + 1, r.y + 2, r.bottom() - 2, tl);
+    cv.hline(r.x + 2, r.right() - 2, r.bottom() - 2, br);
+    cv.vline(r.right() - 2, r.y + 2, r.bottom() - 2, br);
     int tw = cv.text_width(label);
     int off = pressed ? 1 : 0;
     cv.text(r.x + (r.w - tw) / 2 + off, r.y + (r.h - kFontHeight) / 2 + off,
@@ -93,8 +111,11 @@ inline void draw_checkbox(Canvas &cv, int x, int y, bool checked,
     Rect b{x, y, 13, 13};
     cv.fill(b, dc.field_bg);
     cv.frame(b, dc.btn_frame);
+    // Sunken: dark shadow top/left, light highlight bottom/right.
     cv.hline(b.x + 1, b.right() - 1, b.y + 1, dc.btn_d2);
     cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, dc.btn_d2);
+    cv.hline(b.x + 1, b.right() - 1, b.bottom() - 1, dc.btn_d1);
+    cv.vline(b.right() - 1, b.y + 1, b.bottom() - 1, dc.btn_d1);
     if (checked) {
         // A thick tick mark.
         for (int i = 0; i < 4; ++i) {
