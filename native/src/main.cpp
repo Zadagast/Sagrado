@@ -37,6 +37,9 @@ struct App {
     Rect dropdown{};
     int item_h = 18;
     int dd_rows = 1, dd_colw = 1; // dropdown column layout
+    int dd_scroll = 0;            // first visible column (long menus scroll)
+    int dd_cols_total = 1;        // total columns before clamping to width
+    int dd_cols_shown = 1;        // columns that fit in the window
     int drag_mode = 0; // 0 none, 3 thumb drag, 4 title boxes
     int thumb_grab = 0;
     // Scrolling.
@@ -299,10 +302,19 @@ const char *menu_item_text(int m, int i) {
 // Dropdown item index at a point, honoring the column layout.
 int dropdown_index(int x, int y) {
     if (!g_app.dropdown.contains(x, y)) return -1;
-    int col = (x - g_app.dropdown.x - 2) / g_app.dd_colw;
+    int col = (x - g_app.dropdown.x - 2) / g_app.dd_colw + g_app.dd_scroll;
     int row = (y - g_app.dropdown.y - 2) / g_app.item_h;
     if (row < 0 || row >= g_app.dd_rows) return -1;
+    if (col < 0 || col >= g_app.dd_cols_total) return -1;
     return col * g_app.dd_rows + row;
+}
+
+// Clamp the dropdown column-scroll to the valid range.
+void clamp_dd_scroll() {
+    int max_scroll = g_app.dd_cols_total - g_app.dd_cols_shown;
+    if (max_scroll < 0) max_scroll = 0;
+    if (g_app.dd_scroll > max_scroll) g_app.dd_scroll = max_scroll;
+    if (g_app.dd_scroll < 0) g_app.dd_scroll = 0;
 }
 
 // The open pull-down menu: dark raised panel, red hilite bar, painted last.
@@ -324,11 +336,24 @@ void paint_dropdown(Canvas &cv) {
     int colw = wmax + 24;
     g_app.dd_rows = rows;
     g_app.dd_colw = colw;
+    g_app.dd_cols_total = cols;
+
+    // How many columns fit the window width; the rest scroll into view.
+    int cols_fit = (cv.width() - 6) / colw;
+    if (cols_fit < 1) cols_fit = 1;
+    int cols_shown = cols < cols_fit ? cols : cols_fit;
+    g_app.dd_cols_shown = cols_shown;
+    clamp_dd_scroll();
+    bool can_left = g_app.dd_scroll > 0;
+    bool can_right = g_app.dd_scroll + cols_shown < cols;
+    int arrow_h = (can_left || can_right) ? g_app.item_h : 0;
+
     int rx = g_app.menu_rects[m].x;
-    if (rx + cols * colw + 4 > cv.width())
-        rx = cv.width() - cols * colw - 4;
+    if (rx + cols_shown * colw + 4 > cv.width())
+        rx = cv.width() - cols_shown * colw - 4;
     if (rx < 0) rx = 0;
-    Rect r{rx, top, cols * colw + 4, rows * g_app.item_h + 4};
+    Rect r{rx, top, cols_shown * colw + 4,
+           rows * g_app.item_h + 4 + arrow_h};
     g_app.dropdown = r;
     UiColors uc = ui_colors(active_theme());
     cv.fill(r, uc.bar_body);
@@ -339,14 +364,26 @@ void paint_dropdown(Canvas &cv) {
     cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, uc.bar_dark);
     for (int i = 0; i < n; ++i) {
         int col = i / rows, row = i % rows;
-        Rect item{r.x + 2 + col * colw, r.y + 2 + row * g_app.item_h,
-                  colw, g_app.item_h};
+        if (col < g_app.dd_scroll || col >= g_app.dd_scroll + cols_shown)
+            continue;
+        Rect item{r.x + 2 + (col - g_app.dd_scroll) * colw,
+                  r.y + 2 + row * g_app.item_h, colw, g_app.item_h};
         bool hot = i == g_app.hot_item;
         if (hot) cv.fill(item, uc.hilite);
         Color fg = hot ? uc.hilite_text : uc.text;
         if (m == 4 && i == g_app.theme_index)
             cv.text(item.x + 2, item.y + 1, ">", fg);
         cv.text(item.x + 10, item.y + 1, menu_item_text(m, i), fg);
+    }
+    // Scroll affordances: "<< more" / "more >>" row along the bottom.
+    if (arrow_h) {
+        int ay = r.bottom() - arrow_h - 1;
+        cv.hline(r.x + 1, r.right() - 1, ay, uc.bar_dark);
+        if (can_left) cv.text(r.x + 8, ay + 2, "<< more", uc.text);
+        if (can_right) {
+            const char *t = "more >>";
+            cv.text(r.right() - cv.text_width(t) - 8, ay + 2, t, uc.text);
+        }
     }
 }
 
@@ -409,6 +446,17 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
             if (g_app.open_menu >= 0) {
                 if (g_app.dropdown.contains(x, y)) {
+                    // Bottom "<< more / more >>" row: scroll a column.
+                    int arrow_top =
+                        g_app.dropdown.bottom() - g_app.item_h - 1;
+                    if (g_app.dd_cols_total > g_app.dd_cols_shown &&
+                        y >= arrow_top) {
+                        int mid = g_app.dropdown.x + g_app.dropdown.w / 2;
+                        g_app.dd_scroll += (x < mid ? -1 : 1);
+                        clamp_dd_scroll();
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                        return 0;
+                    }
                     int i = dropdown_index(x, y);
                     int m = g_app.open_menu;
                     g_app.open_menu = -1;
@@ -429,6 +477,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (g_app.menu_rects[i].contains(x, y)) {
                     g_app.open_menu = i;
                     g_app.hot_item = -1;
+                    g_app.dd_scroll = 0;
                     InvalidateRect(hwnd, nullptr, FALSE);
                     return 0;
                 }
@@ -491,8 +540,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_MOUSEWHEEL: {
-            set_scroll(g_app.scroll -
-                       GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA * 3);
+            int delta = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
+            if (g_app.open_menu >= 0) {
+                // Scroll the open menu's columns instead of the document.
+                g_app.dd_scroll -= delta;
+                clamp_dd_scroll();
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            set_scroll(g_app.scroll - delta * 3);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
