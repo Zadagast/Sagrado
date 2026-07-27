@@ -166,17 +166,39 @@ struct ScrollBar {
     void layout() {
         set(value);
         int len = vertical ? r.h : r.w;
-        int a = kArrowLen;
-        if (len < a * 5) a = len / 5;
+        const Theme *theme = kit_theme();
+        const ThemeImage *bar =
+            theme ? theme->image(vertical ? SlotVScrollDoubleArrows
+                                          : SlotHScrollDoubleArrows)
+                  : nullptr;
+        int a0 = 0, a1 = 0;  // leading / trailing arrow-pair zone
+        if (bar) {
+            if (vertical) {
+                a0 = bar->positions[1] > 0 ? bar->positions[1] : bar->caps[1];
+                a1 = bar->positions[3] > 0 ? bar->positions[3] : bar->caps[3];
+            } else {
+                a0 = bar->positions[0] > 0 ? bar->positions[0] : bar->caps[0];
+                a1 = bar->positions[2] > 0 ? bar->positions[2] : bar->caps[2];
+            }
+        }
+        if (a0 < 8) a0 = kArrowLen * 2;
+        if (a1 < 8) a1 = kArrowLen * 2;
+        if (len < a0 + a1 + 16) {
+            a0 = len / 5;
+            a1 = len / 5;
+            if (a0 < 4) a0 = 4;
+            if (a1 < 4) a1 = 4;
+        }
+        int half0 = a0 / 2, half1 = a1 / 2;
         auto box = [&](int off, int size) {
             return vertical ? Rect{r.x, r.y + off, r.w, size}
                             : Rect{r.x + off, r.y, size, r.h};
         };
-        dec_a = box(0, a);
-        inc_a = box(a, a);
-        dec_b = box(len - 2 * a, a);
-        inc_b = box(len - a, a);
-        int t0 = 2 * a, tlen = len - 4 * a;
+        dec_a = box(0, half0);
+        inc_a = box(half0, a0 - half0);
+        dec_b = box(len - a1, half1);
+        inc_b = box(len - a1 + half1, a1 - half1);
+        int t0 = a0, tlen = len - a0 - a1;
         if (tlen < 0) tlen = 0;
         track = box(t0, tlen);
         int span = vertical ? track.h : track.w;
@@ -188,36 +210,63 @@ struct ScrollBar {
     }
 
     void paint(Canvas &cv) const {
-        ScrollColors sc = scroll_colors(kit_theme());
-        cv.fill(r, sc.track);
-        cv.frame(r, sc.frame);
-        // Track bevel.
-        cv.hline(r.x + 1, r.right() - 1, r.y + 1, sc.track_l1);
-        cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, sc.track_l1);
-        cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, sc.track_d1);
-        cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, sc.track_d1);
-        auto arrow = [&](Rect b, bool back) {
-            plate(cv, b, sc.face, sc.light, sc.dark, sc.frame);
-            int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+        const Theme *theme = kit_theme();
+        ScrollColors sc = scroll_colors(theme);
+        const ThemeImage *bar =
+            theme ? theme->image(vertical ? SlotVScrollDoubleArrows
+                                          : SlotHScrollDoubleArrows)
+                  : nullptr;
+        const ThemeImage *ind =
+            theme ? theme->image(vertical ? SlotVScrollIndicatorNormal
+                                          : SlotHScrollIndicatorNormal)
+                  : nullptr;
+        const ThemeImage *grips =
+            theme ? theme->image(vertical ? SlotVScrollGripsNormal
+                                          : SlotHScrollGripsNormal)
+                  : nullptr;
+
+        if (bar) {
+            cv.nine_slice(*bar, r);
+        } else {
+            cv.fill(r, sc.track);
+            cv.frame(r, sc.frame);
+            cv.hline(r.x + 1, r.right() - 1, r.y + 1, sc.track_l1);
+            cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, sc.track_l1);
+            cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, sc.track_d1);
+            cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, sc.track_d1);
+            auto arrow = [&](Rect b, bool back) {
+                plate(cv, b, sc.face, sc.light, sc.dark, sc.frame);
+                int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+                for (int i = 0; i < 4; ++i) {
+                    int t = back ? i : 3 - i;
+                    if (vertical)
+                        cv.hline(cx - t, cx + t + 1, cy - 2 + i, sc.label);
+                    else
+                        cv.vline(cx - 2 + i, cy - t, cy + t + 1, sc.label);
+                }
+            };
+            arrow(dec_a, true);
+            arrow(inc_a, false);
+            arrow(dec_b, true);
+            arrow(inc_b, false);
+        }
+
+        if (ind) {
+            cv.nine_slice(*ind, thumb);
+        } else {
+            plate(cv, thumb, sc.thumb, sc.thumb_l, sc.thumb_d, sc.frame);
+            int cx = thumb.x + thumb.w / 2, cy = thumb.y + thumb.h / 2;
             for (int i = 0; i < 4; ++i) {
-                int t = back ? i : 3 - i;
-                if (vertical)
-                    cv.hline(cx - t, cx + t + 1, cy - 2 + i, sc.label);
-                else
-                    cv.vline(cx - 2 + i, cy - t, cy + t + 1, sc.label);
+                if (vertical && thumb.h > 24)
+                    cv.hline(cx - 4, cx + 4, cy - 4 + i * 2, sc.thumb_l);
+                else if (!vertical && thumb.w > 24)
+                    cv.vline(cx - 4 + i * 2, cy - 4, cy + 4, sc.thumb_l);
             }
-        };
-        arrow(dec_a, true);
-        arrow(inc_a, false);
-        arrow(dec_b, true);
-        arrow(inc_b, false);
-        plate(cv, thumb, sc.thumb, sc.thumb_l, sc.thumb_d, sc.frame);
-        int cx = thumb.x + thumb.w / 2, cy = thumb.y + thumb.h / 2;
-        for (int i = 0; i < 4; ++i) {
-            if (vertical && thumb.h > 24)
-                cv.hline(cx - 4, cx + 4, cy - 4 + i * 2, sc.thumb_l);
-            else if (!vertical && thumb.w > 24)
-                cv.vline(cx - 4 + i * 2, cy - 4, cy + 4, sc.thumb_l);
+        }
+        if (grips && grips->w > 0 && grips->h > 0) {
+            int gx = thumb.x + (thumb.w - grips->w) / 2;
+            int gy = thumb.y + (thumb.h - grips->h) / 2;
+            if (gx >= thumb.x && gy >= thumb.y) cv.blit_image(*grips, gx, gy);
         }
     }
 
@@ -309,15 +358,29 @@ void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
     cv.fill({ring.right() - 2, ring.y, 2, ring.h}, rc);
     cv.frame({ring.x + 2, ring.y + 2, ring.w - 4, ring.h - 4}, hc.frame);
 
-    // Header: Column Header raised plates + Primary Label text.
+    // Header: Column Header art when present, colour plates otherwise.
     cv.set_clip(p.header);
     cv.fill(p.header, hc.face);
+    const ThemeImage *hdr_n =
+        theme ? theme->image(SlotColumnHeaderNormal) : nullptr;
+    const ThemeImage *hdr_h =
+        theme ? theme->image(SlotColumnHeaderHilited) : nullptr;
     int x = p.header.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
-        plate(cv, {x, p.header.y, cols[i].w + 1, p.header.h}, hc.face,
-              hc.light, hc.dark, hc.frame);
+        Rect cell{x, p.header.y, cols[i].w + 1, p.header.h};
+        const ThemeImage *art =
+            (i == p.sort_col && hdr_h) ? hdr_h : hdr_n;
+        if (art) {
+            cv.nine_slice(*art, cell);
+        } else if (i == p.sort_col) {
+            plate(cv, cell, hc.hilite, hc.hilite_light, hc.hilite_dark,
+                  hc.frame);
+        } else {
+            plate(cv, cell, hc.face, hc.light, hc.dark, hc.frame);
+        }
+        Color ink = (i == p.sort_col) ? hc.hilite_label : hc.label;
         cv.text(x + 6, p.header.y + (p.header.h - kFontHeight) / 2 + 1,
-                cols[i].title, hc.label);
+                cols[i].title, ink);
         x += cols[i].w;
     }
     cv.clear_clip();
@@ -1235,17 +1298,25 @@ std::vector<ChatLine> wrap_log(Canvas &cv, const std::vector<room::Line> &log,
     return out;
 }
 
-// The room's own tab: Column Header Hilite plate (Standard: held red).
+// The room's own tab: Column Header Hilite art/plate (Standard: held red).
 void draw_tab(Canvas &cv, Rect r, const char *label, bool pressed,
               const DialogColors &dc, const HeaderColors &hc) {
-    cv.fill(r, hc.hilite);
-    rounded_frame(cv, r, dc.btn_frame, dc.workspace);
-    Color hi = pressed ? hc.hilite_dark : hc.hilite_light;
-    Color lo = pressed ? hc.hilite_light : hc.hilite_dark;
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, hi);
-    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, hi);
-    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, lo);
-    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, lo);
+    const Theme *theme = kit_theme();
+    const ThemeImage *art =
+        theme ? theme->image(SlotColumnHeaderHilited) : nullptr;
+    if (!art && theme) art = theme->image(SlotColumnHeaderNormal);
+    if (art) {
+        cv.nine_slice(*art, r);
+    } else {
+        cv.fill(r, hc.hilite);
+        rounded_frame(cv, r, dc.btn_frame, dc.workspace);
+        Color hi = pressed ? hc.hilite_dark : hc.hilite_light;
+        Color lo = pressed ? hc.hilite_light : hc.hilite_dark;
+        cv.hline(r.x + 1, r.right() - 1, r.y + 1, hi);
+        cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, hi);
+        cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, lo);
+        cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, lo);
+    }
     int off = pressed ? 1 : 0;
     blit_icon(cv, kIcChat, r.x + 6 + off, r.y + (r.h - kIcChat.h) / 2 + off);
     cv.text(r.x + 26 + off, r.y + (r.h - kFontHeight) / 2 + off, label,
@@ -1335,9 +1406,20 @@ void paint_server() {
         Rect row{body.x, body.y + i * kUserRowH, body.w, kUserRowH};
         cv.fill(row, from_u32(u.bg));
         cv.hline(row.x, row.right(), row.bottom() - 1, lc.separator);
-        blit_icon(cv, kIcUsers, row.x + 4, row.y + (kUserRowH - kIcUsers.h) / 2);
-        cv.text(row.x + 26, row.y + (kUserRowH - kFontHeight) / 2,
-                u.nick.c_str(), from_u32(u.fg));
+        const ThemeImage *uic =
+            theme ? theme->icon16(IconUser16) : nullptr;
+        if (uic && uic->w > 0 && uic->h > 0) {
+            int iy = row.y + (kUserRowH - uic->h) / 2;
+            cv.blit_image(*uic, row.x + 4, iy);
+            cv.text(row.x + 4 + uic->w + 6,
+                    row.y + (kUserRowH - kFontHeight) / 2, u.nick.c_str(),
+                    from_u32(u.fg));
+        } else {
+            blit_icon(cv, kIcUsers, row.x + 4,
+                      row.y + (kUserRowH - kIcUsers.h) / 2);
+            cv.text(row.x + 26, row.y + (kUserRowH - kFontHeight) / 2,
+                    u.nick.c_str(), from_u32(u.fg));
+        }
     }
     cv.clear_clip();
     s.user_sb.paint(cv);

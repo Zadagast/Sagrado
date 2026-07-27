@@ -21,9 +21,45 @@ Full index names live in [`hap-color-table.md`](hap-color-table.md) and
 | `header_colors` | Column Header 174–182 (+ Primary Label) | Column headers, active chat tabs |
 | `scroll_colors` | ScrollBar 128–147 | Scroll tracks, arrows, thumbs |
 | Primary Light/Dark/Frame | 1 / 3 / 4 | Sunken well bevels |
+| `Theme::image` / `icon` | Images + Icons sections | Widget bitmaps (below) |
 
 Process-wide: set `kit_theme_fn` at boot (`settings::active_theme` in KDX) so
 kit surfaces that cannot take a `Theme*` (popup menus) still resolve colours.
+
+## Widget art slots (Images section)
+
+Prefer these bitmaps when present; fall back to the colour helpers above.
+
+| Slot enum | Index | Use |
+|---|---|---|
+| `SlotColumnHeaderNormal` / `Hilited` | 150 / 151 | Tracker column headers; active chat / TextEdit tabs |
+| `SlotHScrollDoubleArrows` | 162 | Horizontal scrollbar body (arrow pairs in caps) |
+| `SlotHScrollIndicatorNormal` | 166 | H-scroll thumb |
+| `SlotHScrollGripsNormal` | 169 | H-scroll thumb grips overlay |
+| `SlotVScrollDoubleArrows` | 181 | Vertical scrollbar body |
+| `SlotVScrollIndicatorNormal` | 185 | V-scroll thumb |
+| `SlotVScrollGripsNormal` | 188 | V-scroll thumb grips overlay |
+| `SlotPushButtonNormal` / `Hilited` | 25 / 26 | Push buttons |
+| `SlotWindow*` | 223+ | Ooze Gel traffic lights / menu / resize |
+
+Scroll bar art: 9-slice the DoubleArrows image into the bar rect; travel
+bounds come from `positions` (fallback: `caps`). Overlay Indicator on the
+thumb, then Grips centered when the thumb is tall/wide enough.
+
+## Icons section
+
+Loaded from `.hap` section 3 (`0x44` / `0x48`) into `Theme::icons`. Same
+image-record format as the Images section. Indices are sparse; common
+pairs are 16×16 at N and ~32×32 at N+1 (`HapIcon` in `hap.h`):
+
+| HapIcon | Index | Typical use |
+|---|---|---|
+| `IconFileGeneric16/32` | 4 / 5 | Generic file mark |
+| `IconUser16/32` | 44 / 45 | Settings Identity well; chat user list |
+| `IconFolder16/32` | 64 / 65 | Folders (File Browser later) |
+
+Helpers: `icon16(slot)`, `icon32(slot)`. Themes without an Icons section
+keep program-art fallbacks (`kdx_art.h`).
 
 ## Per-window shopping list
 
@@ -48,18 +84,23 @@ kit surfaces that cannot take a `Theme*` (popup menus) still resolve colours.
 ### Tracker
 - Client fill: Primary Background
 - Pane ring: Focus Box (active) / Primary Frame (idle)
-- Headers: Column Header Frame/Light/Header/Dark + Primary Label
+- Headers: `SlotColumnHeader*` art, else Column Header colours + Primary Label
 - Body: List Background / Label / Hilite / Sort Column / Separator
-- Scrollbars: ScrollBar group (track + indicator + label)
+- Scrollbars: `SlotVScroll*` / `SlotHScroll*` art, else ScrollBar colours
 
 ### Chat
 - Client fill: Primary Background
 - Chat log well: Text Box Background + Primary bevels
 - User list well: List Background + List Separator between rows
+- User marks: `IconUser16` from Icons section when present
 - Entry: Text Box + Focus Box + Insertion Point
-- Room tab: Column Header Hilite*
+- Room tab: `SlotColumnHeaderHilited` art, else Column Header Hilite*
 - Tool buttons: Button group
-- Scrollbars: ScrollBar group
+- Scrollbars: `SlotVScroll*` art, else ScrollBar colours
+
+### Settings (Identity)
+- Icon well: `IconUser32` (Icons section) centered in the 48×48 well; colour
+  placeholder when the theme has no Icons section
 
 ### Launcher (main window)
 - Chrome + Primary/Window Focus Label for the butterfly + “KDX”

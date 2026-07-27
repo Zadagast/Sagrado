@@ -360,12 +360,22 @@ inline void paint() {
         g.canvas.text(lx, g.icon.y - 16, "Icon:", dc.label);
         g.canvas.fill(g.icon, kBlack);
         g.canvas.frame(g.icon, dc.btn_frame);
-        // Placeholder icon: filled with the user's colours + a simple mark.
-        g.canvas.fill({g.icon.x + 4, g.icon.y + 4, g.icon.w - 8, g.icon.h - 8},
-                      from_u32(g_draft.bg));
-        g.canvas.text(g.icon.x + (g.icon.w - g.canvas.text_width("KDX")) / 2,
-                      g.icon.y + (g.icon.h - kFontHeight) / 2, "KDX",
-                      from_u32(g_draft.fg));
+        // Theme Icons section when present (user bust); else nick colours + mark.
+        const ThemeImage *ic =
+            theme ? theme->icon32(IconUser16) : nullptr;
+        if (!ic && theme) ic = theme->icon32(IconFileGeneric16);
+        if (ic && ic->w > 0 && ic->h > 0) {
+            int ix = g.icon.x + (g.icon.w - ic->w) / 2;
+            int iy = g.icon.y + (g.icon.h - ic->h) / 2;
+            g.canvas.blit_image(*ic, ix, iy);
+        } else {
+            g.canvas.fill(
+                {g.icon.x + 4, g.icon.y + 4, g.icon.w - 8, g.icon.h - 8},
+                from_u32(g_draft.bg));
+            g.canvas.text(g.icon.x + (g.icon.w - g.canvas.text_width("KDX")) / 2,
+                          g.icon.y + (g.icon.h - kFontHeight) / 2, "KDX",
+                          from_u32(g_draft.fg));
+        }
     } else {
         g.canvas.text(lx, g.appearance.y + 6, "Appearance:", dc.label);
         draw_button(g.canvas, g.appearance, draft_theme_label(),

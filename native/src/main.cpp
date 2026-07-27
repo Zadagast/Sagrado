@@ -488,6 +488,13 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
         theme ? theme->image(SlotVScrollIndicatorNormal) : nullptr;
     if (ind) {
         cv.nine_slice(*ind, thumb);
+        const ThemeImage *grips =
+            theme ? theme->image(SlotVScrollGripsNormal) : nullptr;
+        if (grips && grips->w > 0 && grips->h > 0 && th >= grips->h + 4) {
+            int gx = thumb.x + (thumb.w - grips->w) / 2;
+            int gy = thumb.y + (thumb.h - grips->h) / 2;
+            cv.blit_image(*grips, gx, gy);
+        }
     } else {
         cv.fill(thumb, uc.thumb);
         cv.frame(thumb, kBlack);
