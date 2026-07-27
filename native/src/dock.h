@@ -72,6 +72,18 @@ inline void blit_icon(Canvas &cv, const Icon &ic, int x, int y) {
         }
 }
 
+inline void assert_topmost() {
+    // WS_EX_TOPMOST is desktop-wide (every process), the same always-on-top
+    // behaviour the real KDX Dock used — not merely above our own windows.
+    if (!g.hwnd || !IsWindow(g.hwnd)) return;
+    static bool reentry = false;
+    if (reentry) return;
+    reentry = true;
+    SetWindowPos(g.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    reentry = false;
+}
+
 inline void layout_size() {
     if (!g.hwnd) return;
     int ch = client_h_for(int(g.items.size()));
@@ -243,8 +255,7 @@ inline void ensure(HINSTANCE hinst) {
                              "KDX Dock", WS_POPUP, x, y, w, h, nullptr,
                              nullptr, hinst, nullptr);
     ShowWindow(g.hwnd, SW_SHOWNOACTIVATE);
-    SetWindowPos(g.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    assert_topmost();
 }
 
 inline void minimize(HWND target, const char *title, Icon icon,
@@ -261,8 +272,7 @@ inline void minimize(HWND target, const char *title, Icon icon,
     layout_size();
     if (g.hwnd) {
         ShowWindow(g.hwnd, SW_SHOWNOACTIVATE);
-        SetWindowPos(g.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        assert_topmost();
         InvalidateRect(g.hwnd, nullptr, FALSE);
         UpdateWindow(g.hwnd);
     }
@@ -327,6 +337,10 @@ inline LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_ACTIVATE:
+            assert_topmost();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case WM_ERASEBKGND:
             return 1;
         case WM_PAINT: {
