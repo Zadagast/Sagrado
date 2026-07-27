@@ -464,6 +464,8 @@ void paint_tracker() {
 void blit_canvas(HDC hdc, const Canvas &cv);
 void start_session(room::Role role, const std::string &id,
                    const std::string &token, const std::string &name);
+void disconnect_server();
+void open_chat();
 
 // Join whatever the server list has selected.
 void join_selected() {
@@ -696,7 +698,7 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 if (was == 0 && g.action.contains(x, y)) {
                     if (g.hosting.active)
-                        host_room::stop_hosting();
+                        disconnect_server();
                     else
                         host_room::start_hosting();
                 } else if (was == 1 && g.close.contains(x, y)) {
@@ -1006,11 +1008,24 @@ void paint_server() {
     paint_grip(cv, s.lay.grip, focused, nullptr);
 }
 
-void close_session() {
-    // Leave the relay first (UI-safe), then drop the listing without blocking
-    // WM_DESTROY on a tracker HTTP call.
+// Tear down the relay session and, if we were hosting, the tracker listing.
+// Closing the chat window must NOT call this — connection and chat UI are
+// separate; Chat can reopen onto the same session.
+void disconnect_server() {
     room::leave();
     host_room::stop_hosting_async();
+    if (g_server.hwnd) DestroyWindow(g_server.hwnd);
+    g_app.connections = 0;
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+}
+
+void refresh_connection_count() {
+    if (!room::on_server()) {
+        g_app.connections = 0;
+        return;
+    }
+    g_app.connections = int(room::user_copy().size());
+    if (g_app.connections < 1) g_app.connections = 1;
 }
 
 LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1134,6 +1149,10 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == VK_ESCAPE) DestroyWindow(hwnd);
             return 0;
         case room::WM_ROOM_EVENT:
+            refresh_connection_count();
+            if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case WM_SIZE:
         case WM_ACTIVATE:
         case WM_SETFOCUS:
@@ -1155,7 +1174,9 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DESTROY:
-            close_session();
+            // Chat UI only — stay on the server. Events retarget to the
+            // launcher until Chat is opened again.
+            if (room::g.notify == hwnd) room::attach_notify(g_main);
             s.hwnd = nullptr;
             if (g_main) {
                 SetForegroundWindow(g_main);
@@ -1173,20 +1194,23 @@ void start_session(room::Role role, const std::string &id,
                    const std::string &token, const std::string &name) {
     HWND w = open_server_window(g_hinst);
     room::start(role, w, id, token, name);
+    refresh_connection_count();
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
     InvalidateRect(w, nullptr, FALSE);
 }
 
-// Bring the public chat window forward. Real KDX's Chat command opens the
-// lobby for the server you are on; if you are not connected yet, Connect...
-// is the way in.
+// Bring the public chat window forward. Connection lives in room:: — closing
+// this window does not leave the server. Offline, Chat opens Connect...
 void open_chat() {
     if (g_server.hwnd) {
         ShowWindow(g_server.hwnd, SW_RESTORE);
         SetForegroundWindow(g_server.hwnd);
         return;
     }
-    if (room::g.running || room::g.connected) {
-        open_server_window(g_hinst);
+    if (room::on_server() || host_room::g.hosting.active) {
+        HWND w = open_server_window(g_hinst);
+        room::attach_notify(w);
+        InvalidateRect(w, nullptr, FALSE);
         return;
     }
     open_tracker(g_hinst);
@@ -1374,7 +1398,7 @@ void menu_chosen(int id) {
             open_host_room(g_hinst);
             break;
         case CmdStopHosting:
-            host_room::stop_hosting();
+            disconnect_server();
             break;
         case CmdConnect:
             open_tracker(g_hinst);
@@ -1521,6 +1545,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case room::WM_ROOM_EVENT:
+            // Chat is closed; keep the launcher counters fresh while we stay
+            // connected in the background.
+            refresh_connection_count();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case WM_ACTIVATE:
         case WM_SETFOCUS:
         case WM_KILLFOCUS:
@@ -1537,6 +1567,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DESTROY:
+            disconnect_server();
             PostQuitMessage(0);
             return 0;
     }

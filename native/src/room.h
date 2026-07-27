@@ -87,6 +87,15 @@ inline void wake() {
     if (g.notify) PostMessage(g.notify, WM_ROOM_EVENT, 0, 0);
 }
 
+// Retarget room events (chat window closed, reopened, or handed to the
+// launcher). Does not touch the relay connection.
+inline void attach_notify(HWND hwnd) {
+    g.notify = hwnd;
+    wake();
+}
+
+inline bool on_server() { return g.running || g.connected; }
+
 inline void add_line(const std::string &text, uint32_t fg = kNoticeFg) {
     {
         Guard lk(&g.lock);
