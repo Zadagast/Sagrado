@@ -9,6 +9,7 @@
 
 #include "canvas.h"
 #include "chrome.h"
+#include "controls.h"
 #include "editor.h"
 
 namespace {
@@ -18,9 +19,12 @@ constexpr int kTabH = 33;  // measured: tab strip rows 42..74
 
 const char *kMenus[] = {"File", "Tools", "Favorites", "Location",
                         "Appearance"};
-const char *kMenuItems[5][6] = {
-    {"New", "Open...", "Save", "Save As...", "Close", "Quit"},
-    {"Find & Replace...", "Sort Lines", "Count Occurrences", nullptr},
+// Tools items match the real Haxial TextEdit's Tools menu.
+const char *kMenuItems[5][9] = {
+    {"New", "Open...", "Save", "Save As...", "Close", "Quit", nullptr},
+    {"Find...", "Find Next", "Replace & Find Next", "Count",
+     "Sort Lines Ascending", "Sort Lines Descending", "Insert Date/Time",
+     nullptr},
     {"Add Favorite", "Show Favorites", nullptr},
     {"Documents Folder", "Desktop", nullptr},
     {nullptr}, // Appearance: built dynamically from discovered .hap files
@@ -100,6 +104,25 @@ void select_theme(int index) {
 
 const Theme *active_theme() { return g_app.themed ? &g_app.theme : nullptr; }
 
+HWND g_main = nullptr;
+HINSTANCE g_hinst = nullptr;
+
+// The Find & Replace dialog: a second Sagrado-Kit window (its own frame,
+// fields, checkboxes and buttons), modeled on the real Haxial TextEdit's.
+struct FindDlg {
+    HWND hwnd = nullptr;
+    Canvas canvas;
+    std::string find, replace;
+    bool case_sensitive = false, stop_end = false;
+    int focus = 0;   // 0 = Find field, 1 = Replace field
+    int pressed = 0; // button being pressed: 1 ReplaceAll 2 Replace 3 Cancel
+                     // 4 Find, 5 close box
+    bool caret_on = true;
+    ChromeLayout lay{};
+    Rect find_field{}, repl_field{}, cs_box{}, se_box{};
+    Rect b_repl_all{}, b_repl{}, b_cancel{}, b_find{};
+} g_find;
+
 constexpr int kLineH = kFontHeight + 1;
 
 int max_scroll() {
@@ -162,6 +185,151 @@ Pos pos_at(int px, int py) {
                                     px - e.x - pad);
     return {line, col};
 }
+
+// --- Find / Tools operations --------------------------------------------
+
+inline char lower_ascii(char c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+
+bool str_ieq(const std::string &a, const std::string &b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (lower_ascii(a[i]) != lower_ascii(b[i])) return false;
+    return true;
+}
+
+// First occurrence of needle in s at or after `start`.
+bool line_find(const std::string &s, const std::string &n, int start, bool cs,
+               int &pos) {
+    if (n.empty() || start < 0) return false;
+    for (int i = start; i + int(n.size()) <= int(s.size()); ++i) {
+        bool ok = true;
+        for (int j = 0; j < int(n.size()); ++j) {
+            char a = s[size_t(i + j)], b = n[size_t(j)];
+            if (cs ? a != b : lower_ascii(a) != lower_ascii(b)) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            pos = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Search forward from the caret (wrapping unless "stop at end" is set),
+// selecting the match. Returns true when found.
+bool do_find_next() {
+    TextDoc &d = g_app.doc;
+    if (g_find.find.empty()) return false;
+    Pos start = d.has_selection() ? d.sel_hi() : d.caret();
+    int n = d.line_count();
+    for (int k = 0; k <= n; ++k) {
+        int li = start.line + k;
+        if (li >= n) {
+            if (g_find.stop_end) break;
+            li -= n;
+        }
+        int from = (k == 0) ? start.col : 0;
+        int pos;
+        if (line_find(d.line(li), g_find.find, from, g_find.case_sensitive,
+                      pos)) {
+            d.set_caret({li, pos}, false);
+            d.set_caret({li, pos + int(g_find.find.size())}, true);
+            ensure_caret_visible();
+            wake_caret();
+            if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+            return true;
+        }
+    }
+    return false;
+}
+
+void do_replace_and_find() {
+    TextDoc &d = g_app.doc;
+    if (d.has_selection()) {
+        std::string s = d.selected_text();
+        bool eq = g_find.case_sensitive ? s == g_find.find
+                                        : str_ieq(s, g_find.find);
+        if (eq) d.insert_text(g_find.replace);
+    }
+    do_find_next();
+}
+
+int do_replace_all() {
+    TextDoc &d = g_app.doc;
+    d.set_caret({0, 0}, false);
+    int count = 0;
+    while (do_find_next() && count < 100000) {
+        d.insert_text(g_find.replace);
+        ++count;
+    }
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+    return count;
+}
+
+int count_occurrences() {
+    TextDoc &d = g_app.doc;
+    if (g_find.find.empty()) return 0;
+    int count = 0;
+    for (int i = 0; i < d.line_count(); ++i) {
+        int from = 0, pos;
+        while (line_find(d.line(i), g_find.find, from, g_find.case_sensitive,
+                         pos)) {
+            ++count;
+            from = pos + int(g_find.find.size());
+        }
+    }
+    return count;
+}
+
+void sort_lines(bool ascending) {
+    TextDoc &d = g_app.doc;
+    int lo = 0, hi = d.line_count() - 1;
+    if (d.has_selection()) {
+        lo = d.sel_lo().line;
+        hi = d.sel_hi().line;
+    }
+    if (hi <= lo) return;
+    std::vector<std::string> seg;
+    for (int i = lo; i <= hi; ++i) seg.push_back(d.line(i));
+    std::sort(seg.begin(), seg.end());
+    if (!ascending) std::reverse(seg.begin(), seg.end());
+    std::string all = d.text();
+    // Rebuild by replacing the segment lines.
+    std::vector<std::string> lines;
+    {
+        std::string cur;
+        for (char ch : all) {
+            if (ch == '\n') { lines.push_back(cur); cur.clear(); }
+            else cur.push_back(ch);
+        }
+        lines.push_back(cur);
+    }
+    for (int i = lo; i <= hi; ++i) lines[size_t(i)] = seg[size_t(i - lo)];
+    std::string out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        out += lines[i];
+        if (i + 1 < lines.size()) out.push_back('\n');
+    }
+    d.set_text(out);
+    d.set_caret({lo, 0}, false);
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+}
+
+void insert_datetime() {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char buf[64];
+    wsprintfA(buf, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay,
+              st.wHour, st.wMinute);
+    g_app.doc.insert_text(buf);
+    ensure_caret_visible();
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+}
+
+void open_find_dialog(HINSTANCE hinst); // defined after the dialog wnd_proc
 
 void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect c = lay.client;
@@ -334,7 +502,7 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
 int menu_item_count(int m) {
     if (m == 4) return 1 + int(g_app.hap_names.size());
     int n = 0;
-    while (n < 6 && kMenuItems[m][n]) ++n;
+    while (n < 8 && kMenuItems[m][n]) ++n;
     return n;
 }
 
@@ -449,8 +617,7 @@ void repaint(HWND hwnd) {
     paint_dropdown(cv);
 }
 
-void blit(HDC hdc) {
-    const Canvas &cv = g_app.canvas;
+void blit_canvas(HDC hdc, const Canvas &cv) {
     if (cv.width() == 0) return;
     BITMAPINFO bmi{};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -461,6 +628,258 @@ void blit(HDC hdc) {
     bmi.bmiHeader.biCompression = BI_RGB;
     SetDIBitsToDevice(hdc, 0, 0, cv.width(), cv.height(), 0, 0, 0, cv.height(),
                       cv.data(), &bmi, DIB_RGB_COLORS);
+}
+
+void blit(HDC hdc) { blit_canvas(hdc, g_app.canvas); }
+
+// --- Find & Replace dialog window ---------------------------------------
+
+constexpr int kDlgW = 442, kDlgH = 176;
+
+void paint_find_dialog() {
+    Canvas &cv = g_find.canvas;
+    RECT rc;
+    GetClientRect(g_find.hwnd, &rc);
+    int w = rc.right, h = rc.bottom;
+    if (w <= 0 || h <= 0) return;
+    if (cv.width() != w || cv.height() != h) cv.resize(w, h);
+    const Theme *theme = active_theme();
+    bool focused = GetForegroundWindow() == g_find.hwnd;
+
+    // Dialog chrome: standard frame with only close + minimize (no hatch,
+    // no maximize), like the real Find window.
+    ChromeLayout lay = chrome_layout(w, h, theme, focused);
+    lay.hatch_box = {0, 0, 0, 0};
+    lay.max_box = {0, 0, 0, 0};
+    g_find.lay = lay;
+    paint_chrome(cv, lay, "Find and Replace", focused, 0,
+                 g_find.pressed == 5 ? 1 : 0, theme);
+
+    DialogColors dc = dialog_colors(theme);
+    Rect cl = lay.client;
+    cv.fill(cl, dc.workspace);
+
+    int lx = cl.x + 10;
+    int fx = cl.x + 84;
+    int fw = cl.right() - 14 - fx;
+    g_find.find_field = {fx, cl.y + 10, fw, 20};
+    g_find.repl_field = {fx, cl.y + 40, fw, 20};
+    cv.text(lx, g_find.find_field.y + 6, "Find:", dc.label);
+    cv.text(lx, g_find.repl_field.y + 6, "Replace:", dc.label);
+    draw_field(cv, g_find.find_field, g_find.find.c_str(), g_find.focus == 0,
+               g_find.caret_on, dc);
+    draw_field(cv, g_find.repl_field, g_find.replace.c_str(),
+               g_find.focus == 1, g_find.caret_on, dc);
+
+    int cy = cl.y + 74;
+    g_find.cs_box = {lx, cy, 13, 13};
+    g_find.se_box = {cl.x + 190, cy, 13, 13};
+    draw_checkbox(cv, lx, cy, g_find.case_sensitive, "Case Sensitive", dc);
+    draw_checkbox(cv, cl.x + 190, cy, g_find.stop_end, "Stop at End of File",
+                  dc);
+
+    int by = cl.bottom() - 34;
+    g_find.b_repl_all = {lx, by, 96, 24};
+    g_find.b_repl = {g_find.b_repl_all.right() + 8, by, 76, 24};
+    g_find.b_find = {cl.right() - 14 - 84, by, 84, 26};
+    g_find.b_cancel = {g_find.b_find.x - 10 - 76, by, 76, 24};
+    draw_button(cv, g_find.b_repl_all, "Replace All", g_find.pressed == 1,
+                false, dc);
+    draw_button(cv, g_find.b_repl, "Replace", g_find.pressed == 2, false, dc);
+    draw_button(cv, g_find.b_cancel, "Cancel", g_find.pressed == 3, false, dc);
+    draw_button(cv, g_find.b_find, "Find", g_find.pressed == 4, true, dc);
+}
+
+std::string &find_focused_str() {
+    return g_find.focus == 0 ? g_find.find : g_find.replace;
+}
+
+int find_button_at(int x, int y) {
+    if (g_find.b_repl_all.contains(x, y)) return 1;
+    if (g_find.b_repl.contains(x, y)) return 2;
+    if (g_find.b_cancel.contains(x, y)) return 3;
+    if (g_find.b_find.contains(x, y)) return 4;
+    if (g_find.lay.close_box.contains(x, y)) return 5;
+    return 0;
+}
+
+void run_find_button(int b, HWND hwnd) {
+    switch (b) {
+        case 1: do_replace_all(); break;
+        case 2: do_replace_and_find(); break;
+        case 3:
+        case 5: DestroyWindow(hwnd); return;
+        case 4: do_find_next(); break;
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+LRESULT CALLBACK find_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_NCCALCSIZE:
+            if (wp) return 0;
+            break;
+        case WM_NCHITTEST:
+            return HTCLIENT;
+        case WM_LBUTTONDOWN: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            SetFocus(hwnd);
+            if (g_find.find_field.contains(x, y)) {
+                g_find.focus = 0;
+                g_find.caret_on = true;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (g_find.repl_field.contains(x, y)) {
+                g_find.focus = 1;
+                g_find.caret_on = true;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (g_find.cs_box.contains(x, y) ||
+                (y >= g_find.cs_box.y && y < g_find.cs_box.bottom() &&
+                 x >= g_find.cs_box.x && x < g_find.cs_box.x + 130)) {
+                g_find.case_sensitive = !g_find.case_sensitive;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (g_find.se_box.contains(x, y) ||
+                (y >= g_find.se_box.y && y < g_find.se_box.bottom() &&
+                 x >= g_find.se_box.x && x < g_find.se_box.x + 150)) {
+                g_find.stop_end = !g_find.stop_end;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            int b = find_button_at(x, y);
+            if (b) {
+                g_find.pressed = b;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (y < g_find.lay.title_h)
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            if (g_find.pressed) {
+                ReleaseCapture();
+                int b = find_button_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+                int was = g_find.pressed;
+                g_find.pressed = 0;
+                if (b == was) run_find_button(b, hwnd);
+                else InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+        case WM_CHAR: {
+            char ch = char(wp);
+            if (ch == '\r') {
+                run_find_button(4, hwnd); // Enter = default (Find)
+            } else if (ch == '\t') {
+                g_find.focus ^= 1;
+                g_find.caret_on = true;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (ch == '\b') {
+                std::string &s = find_focused_str();
+                if (!s.empty()) s.pop_back();
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if ((unsigned char)ch >= 32 && (unsigned char)ch < 127) {
+                find_focused_str().push_back(ch);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+            return 0;
+        case WM_TIMER:
+            g_find.caret_on = !g_find.caret_on;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ACTIVATE:
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            paint_find_dialog();
+            blit_canvas(hdc, g_find.canvas);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_DESTROY:
+            KillTimer(hwnd, 1);
+            g_find.hwnd = nullptr;
+            if (g_main) SetForegroundWindow(g_main);
+            return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+void open_find_dialog(HINSTANCE hinst) {
+    if (g_find.hwnd) {
+        SetForegroundWindow(g_find.hwnd);
+        return;
+    }
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSA wc{};
+        wc.lpfnWndProc = find_proc;
+        wc.hInstance = hinst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = "SagradoDialog";
+        RegisterClassA(&wc);
+        registered = true;
+    }
+    // Prefill the Find field with the current selection, if any.
+    if (g_app.doc.has_selection()) {
+        std::string s = g_app.doc.selected_text();
+        if (s.find('\n') == std::string::npos) g_find.find = s;
+    }
+    g_find.focus = 0;
+    g_find.pressed = 0;
+    g_find.caret_on = true;
+    RECT mr{};
+    if (g_main) GetWindowRect(g_main, &mr);
+    int px = mr.left + 40, py = mr.top + 80;
+    g_find.hwnd = CreateWindowExA(0, "SagradoDialog", "Find and Replace",
+                                  WS_POPUP, px, py, kDlgW, kDlgH, g_main,
+                                  nullptr, hinst, nullptr);
+    ShowWindow(g_find.hwnd, SW_SHOW);
+    SetForegroundWindow(g_find.hwnd);
+    SetTimer(g_find.hwnd, 1, 500, nullptr);
+}
+
+// A Tools-menu action (indices match kMenuItems[1]).
+void run_tool(int i, HWND hwnd) {
+    switch (i) {
+        case 0: open_find_dialog(g_hinst); break;             // Find...
+        case 1: // Find Next
+            if (g_find.find.empty()) open_find_dialog(g_hinst);
+            else do_find_next();
+            break;
+        case 2: // Replace & Find Next
+            if (g_find.find.empty()) open_find_dialog(g_hinst);
+            else do_replace_and_find();
+            break;
+        case 3: { // Count
+            if (g_find.find.empty()) { open_find_dialog(g_hinst); break; }
+            int c = count_occurrences();
+            char b[160];
+            wsprintfA(b, "%d occurrence(s) of \"%s\".", c, g_find.find.c_str());
+            MessageBoxA(hwnd, b, "Count", MB_OK);
+            break;
+        }
+        case 4: sort_lines(true); break;   // Sort Lines Ascending
+        case 5: sort_lines(false); break;  // Sort Lines Descending
+        case 6: insert_datetime(); break;  // Insert Date/Time
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 int box_at(int x, int y) {
@@ -508,6 +927,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     if (i >= 0 && i < menu_item_count(m)) {
                         if (m == 0 && (i == 4 || i == 5))
                             DestroyWindow(hwnd); // Close / Quit
+                        else if (m == 1)
+                            run_tool(i, hwnd);
                         else if (m == 4)
                             select_theme(i);
                     }
@@ -763,6 +1184,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 } // namespace
 
 int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
+    g_hinst = hinst;
     discover_haps();
     g_app.doc.set_text(
         "'Twas brillig, and the slithy toves\n"
@@ -789,6 +1211,7 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
         WS_POPUP | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 760, 520, nullptr, nullptr, hinst,
         nullptr);
+    g_main = hwnd;
     ShowWindow(hwnd, show);
     // Focus watchdog: some window managers (Wine/X11) don't deliver
     // WM_ACTIVATE reliably to popup windows, so poll the foreground state.

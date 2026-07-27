@@ -287,17 +287,25 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
 
     // Title-bar boxes, measured from the real window: 1px black outlines
     // over the gradient (no fill, no bevel) with thick white glyphs.
-    flat_box(cv, lay.close_box, pressed_box == 1, cc, pal.frame);
-    close_glyph(cv, lay.close_box, pal.label);
-    flat_box(cv, lay.hatch_box, false, cc, pal.frame);
-    diagonal_hatch(cv, {lay.hatch_box.x + 2, lay.hatch_box.y + 2,
-                        lay.hatch_box.w - 4, lay.hatch_box.h - 4},
-                   pal.label);
-    flat_box(cv, lay.max_box, pressed_box == 3, cc, pal.frame);
-    cv.fill({lay.max_box.x + 1, lay.max_box.y + 6, 10, 2}, pal.label);
-    cv.fill({lay.max_box.x + 5, lay.max_box.y + 2, 2, 10}, pal.label);
-    flat_box(cv, lay.min_box, pressed_box == 4, cc, pal.frame);
-    cv.fill({lay.min_box.x + 1, lay.min_box.y + 6, 10, 2}, pal.label);
+    if (lay.close_box.w > 0) {
+        flat_box(cv, lay.close_box, pressed_box == 1, cc, pal.frame);
+        close_glyph(cv, lay.close_box, pal.label);
+    }
+    if (lay.hatch_box.w > 0) {
+        flat_box(cv, lay.hatch_box, false, cc, pal.frame);
+        diagonal_hatch(cv, {lay.hatch_box.x + 2, lay.hatch_box.y + 2,
+                            lay.hatch_box.w - 4, lay.hatch_box.h - 4},
+                       pal.label);
+    }
+    if (lay.max_box.w > 0) {
+        flat_box(cv, lay.max_box, pressed_box == 3, cc, pal.frame);
+        cv.fill({lay.max_box.x + 1, lay.max_box.y + 6, 10, 2}, pal.label);
+        cv.fill({lay.max_box.x + 5, lay.max_box.y + 2, 2, 10}, pal.label);
+    }
+    if (lay.min_box.w > 0) {
+        flat_box(cv, lay.min_box, pressed_box == 4, cc, pal.frame);
+        cv.fill({lay.min_box.x + 1, lay.min_box.y + 6, 10, 2}, pal.label);
+    }
 
     (void)hot_box;
 }
