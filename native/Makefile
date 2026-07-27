@@ -6,7 +6,7 @@ BUILD = build
 TARGET = $(BUILD)/SagradoTextEdit.exe
 
 SRCS = src/main.cpp
-HDRS = src/canvas.h src/chrome.h src/font.h src/hap.h
+HDRS = $(wildcard src/*.h)
 
 all: $(TARGET)
 
