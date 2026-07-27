@@ -308,6 +308,7 @@ void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
     cv.clear_clip();
 
     // Body: list background, the sorted column tinted, row separators.
+    cv.set_clip(p.body);
     cv.fill(p.body, kListBg);
     x = p.body.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
@@ -317,6 +318,7 @@ void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
     }
     for (int y = p.body.y; y < p.body.bottom(); y += kRowH)
         cv.hline(p.body.x, p.body.right(), y, kRowLine);
+    cv.clear_clip();
 
     p.vsb.paint(cv);
     p.hsb.paint(cv);
@@ -415,9 +417,10 @@ void paint_tracker() {
 
     int idx[kServerCount];
     int n = group_server_indices(idx);
-    int sp_bottom = lay.grip.h ? lay.grip.y - 3 : cl.bottom() - kPaneInset;
+    // The pane runs to the same margin all round; the grow box, painted
+    // last, notches its bottom-right corner exactly like the real tracker.
     sp.r = {cl.x + kPaneInset, gp.r.bottom() + 9, cl.w - 2 * kPaneInset,
-            sp_bottom - gp.r.bottom() - 9};
+            cl.bottom() - kPaneInset - gp.r.bottom() - 9};
     if (sp.r.h < kHdrH + kRowH + kSbW) sp.r.h = kHdrH + kRowH + kSbW;
     sp.sort_col = 3;  // sorted by Server Description
     sp.layout(kServerCols, kServerColCount, n);

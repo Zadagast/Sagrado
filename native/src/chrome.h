@@ -80,7 +80,7 @@ constexpr int kTitleH = 22;
 constexpr int kBorder = 6;
 constexpr int kBtn = 14;      // title-bar boxes are 14x14
 constexpr int kBtnTop = 4;    // ..4px below the window top
-constexpr int kGrip = 20;     // grow box
+constexpr int kGrip = 21;     // grow box, flush with the frame corner
 constexpr int kScrollbar = 16;
 
 struct ChromeLayout {
@@ -157,7 +157,7 @@ inline ChromeLayout chrome_layout(int w, int h, const Theme *theme = nullptr,
         lay.grip = {w - px - resize->w, h - py - resize->h, resize->w,
                     resize->h};
     } else {
-        lay.grip = {w - 1 - kGrip, h - 1 - kGrip, kGrip, kGrip};
+        lay.grip = {w - kGrip, h - kGrip, kGrip, kGrip};
     }
     return lay;
 }
@@ -322,13 +322,13 @@ inline void paint_grip(Canvas &cv, Rect g, bool focused,
     }
     FramePalette pal = frame_palette(theme, focused);
     ChromeColors cc = pal.cc;
-    cv.fill(g, cc.body);
+    // The box grows out of the frame corner: only its top and left edges are
+    // drawn, the other two are the window frame's own outer edges.
+    cv.fill({g.x, g.y, g.w - 2, g.h - 2}, cc.body);
     cv.hline(g.x, g.right(), g.y, pal.frame);
     cv.vline(g.x, g.y, g.bottom(), pal.frame);
-    cv.hline(g.x + 1, g.right(), g.y + 1, cc.bright);
-    cv.vline(g.x + 1, g.y + 1, g.bottom(), cc.bright);
-    cv.hline(g.x + 1, g.right(), g.bottom() - 1, cc.deep);
-    cv.vline(g.right() - 1, g.y + 1, g.bottom(), cc.deep);
+    cv.hline(g.x + 1, g.right() - 2, g.y + 1, cc.bright);
+    cv.vline(g.x + 1, g.y + 1, g.bottom() - 2, cc.bright);
     // Bright diagonal grip stripes toward the corner.
     for (int i = 0; i < 3; ++i) {
         int o = 4 + i * 4;
