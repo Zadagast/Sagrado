@@ -38,6 +38,11 @@ class Canvas {
     int height() const { return height_; }
     const uint32_t *data() const { return pixels_.data(); }
 
+    uint32_t get(int x, int y) const {
+        if (x < 0 || y < 0 || x >= width_ || y >= height_) return 0;
+        return pixels_[size_t(y) * width_ + x];
+    }
+
     void put(int x, int y, uint32_t c) {
         if (x >= 0 && x < width_ && y >= 0 && y < height_)
             pixels_[size_t(y) * width_ + x] = c;
