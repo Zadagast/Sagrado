@@ -7,5 +7,7 @@ name = "REGISTRY"
 class_name = "Registry"
 
 [[migrations]]
-tag = "v1"
+# v1 on this Worker was an unrelated first cut with a SagradoNetwork class.
+tag = "v2"
 new_sqlite_classes = ["Registry"]
+deleted_classes = ["SagradoNetwork"]

@@ -15,7 +15,7 @@ namespace tracker {
 
 // Where the directory lives. Overridden by a tracker.txt next to the exe so
 // a room can be pointed at a private tracker (or a local wrangler dev).
-inline const char *kDefaultUrl = "https://sagrado-tracker.zadagast.workers.dev";
+inline const char *kDefaultUrl = "https://sagrado-tracker.edjay87.workers.dev";
 
 // KDX's fixed group list, shown even when the tracker is unreachable.
 inline const char *const kGroupNames[] = {"Business", "Chat",      "Education",
