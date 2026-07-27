@@ -451,25 +451,27 @@ inline void paint_picker() {
     if (g_pick.canvas.width() != w || g_pick.canvas.height() != h)
         g_pick.canvas.resize(w, h);
     DialogColors dc = dialog_colors(active_theme());
+    ListColors lc = list_colors(active_theme());
     g_pick.canvas.fill({0, 0, w, h}, dc.workspace);
-    g_pick.canvas.frame({0, 0, w, h}, Color{136, 0, 0});
+    g_pick.canvas.frame({0, 0, w, h}, dc.field_focus);
     int rows = (h - 4) / kPickRow;
     int n = int(g_pick.labels.size());
     for (int i = 0; i < rows; ++i) {
         int idx = g_pick.scroll + i;
         if (idx >= n) break;
         Rect row{2, 2 + i * kPickRow, w - 4, kPickRow};
-        if (idx == g_pick.hot) g_pick.canvas.fill(row, Color{136, 0, 0});
+        bool hot = (idx == g_pick.hot);
+        if (hot) g_pick.canvas.fill(row, lc.hilite_bg);
+        Color ink = hot ? lc.hilite_fg : dc.label;
         if (!g_pick.colors.empty()) {
             Rect sw{row.x + 4, row.y + 3, 20, kPickRow - 6};
             g_pick.canvas.fill(sw, from_u32(g_pick.colors[idx]));
-            g_pick.canvas.frame(sw, kBlack);
+            g_pick.canvas.frame(sw, primary_frame(active_theme()));
             g_pick.canvas.text(sw.right() + 6, row.y + 3,
-                               g_pick.labels[idx].c_str(),
-                               idx == g_pick.hot ? kWhite : dc.label);
+                               g_pick.labels[idx].c_str(), ink);
         } else {
             g_pick.canvas.text(row.x + 6, row.y + 3, g_pick.labels[idx].c_str(),
-                               idx == g_pick.hot ? kWhite : dc.label);
+                               ink);
         }
     }
 }

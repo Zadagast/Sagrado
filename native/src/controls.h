@@ -50,6 +50,39 @@ inline DialogColors dialog_colors(const Theme *theme) {
             c(ColDefaultButtonLight + 3)};
 }
 
+// Button Hilite (36–42): pressed/open command rows, hot menu triggers.
+struct ButtonHiliteColors {
+    Color l2, l1, face, d1, d2, frame, label;
+};
+
+inline ButtonHiliteColors button_hilite_colors(const Theme *theme) {
+    if (!theme || !theme->has_colors)
+        return {Color{204, 0, 0}, Color{170, 0, 0}, Color{136, 0, 0},
+                Color{102, 0, 0}, Color{85, 0, 0}, kBlack, kWhite};
+    auto c = [&](int i) { return from_u32(theme->color(i)); };
+    return {c(ColButtonHiliteLight2),
+            c(ColButtonHiliteLight2 + 1),
+            c(ColButtonHiliteLight2 + 2),
+            c(ColButtonHiliteLight2 + 3),
+            c(ColButtonHiliteLight2 + 4),
+            c(ColButtonFrame),
+            c(ColButtonHiliteLabel)};
+}
+
+// Primary bevels for sunken wells (list/chat/entry frames).
+inline Color primary_light(const Theme *theme) {
+    return theme && theme->has_colors ? from_u32(theme->color(ColPrimaryLight))
+                                      : Color{102, 102, 102};
+}
+inline Color primary_dark(const Theme *theme) {
+    return theme && theme->has_colors ? from_u32(theme->color(ColPrimaryDark))
+                                      : Color{34, 34, 34};
+}
+inline Color primary_frame(const Theme *theme) {
+    return theme && theme->has_colors ? from_u32(theme->color(ColPrimaryFrame))
+                                      : kBlack;
+}
+
 // A sunken text field: black box with a thin frame (a 2px Focus Box
 // outline when active) and a Text Insertion Point caret after the contents.
 inline void draw_field(Canvas &cv, Rect r, const char *text, bool focused,

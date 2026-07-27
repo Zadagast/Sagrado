@@ -78,26 +78,15 @@ constexpr int kTrkW = 900, kTrkH = 600;
 constexpr int kPaneInset = 8;  // window margin + the pane's focus ring
 constexpr int kRowH = 18, kHdrH = 18, kSbW = 13, kArrowLen = 15;
 
-// Measured off the real KDX tracker window.
-const Color kListBg{68, 68, 68};     // List Background
-const Color kSortBg{51, 51, 51};     // Sort Column Background
-const Color kRowLine{102, 102, 102}; // 1px separator above each row
-const Color kSelFill{102, 0, 0};     // selected row band
-const Color kPlate{51, 51, 51};      // header / scrollbar plate face
-const Color kPlateHi{102, 102, 102};
-const Color kPlateLo{34, 34, 34};
-const Color kGlyph{136, 136, 136};   // scrollbar arrows
-const Color kFocusBorder{136, 0, 0}; // focused pane ring
-const Color kIdleBorder{17, 17, 17};
-
 // The raised plate used by header cells, scroll arrows and the thumb.
-inline void plate(Canvas &cv, Rect b) {
-    cv.fill(b, kPlate);
-    cv.frame(b, kBlack);
-    cv.hline(b.x + 1, b.right() - 1, b.y + 1, kPlateHi);
-    cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, kPlateHi);
-    cv.hline(b.x + 1, b.right() - 1, b.bottom() - 2, kPlateLo);
-    cv.vline(b.right() - 2, b.y + 1, b.bottom() - 1, kPlateLo);
+inline void plate(Canvas &cv, Rect b, Color face, Color hi, Color lo,
+                  Color frame) {
+    cv.fill(b, face);
+    cv.frame(b, frame);
+    cv.hline(b.x + 1, b.right() - 1, b.y + 1, hi);
+    cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, hi);
+    cv.hline(b.x + 1, b.right() - 1, b.bottom() - 2, lo);
+    cv.vline(b.right() - 2, b.y + 1, b.bottom() - 1, lo);
 }
 
 // A KDX scrollbar: an arrow pair at each end, a draggable thumb between.
@@ -141,31 +130,36 @@ struct ScrollBar {
     }
 
     void paint(Canvas &cv) const {
-        cv.fill(r, kPlate);
-        cv.frame(r, kBlack);
+        ScrollColors sc = scroll_colors(kit_theme());
+        cv.fill(r, sc.track);
+        cv.frame(r, sc.frame);
+        // Track bevel.
+        cv.hline(r.x + 1, r.right() - 1, r.y + 1, sc.track_l1);
+        cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, sc.track_l1);
+        cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, sc.track_d1);
+        cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, sc.track_d1);
         auto arrow = [&](Rect b, bool back) {
-            plate(cv, b);
+            plate(cv, b, sc.face, sc.light, sc.dark, sc.frame);
             int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
             for (int i = 0; i < 4; ++i) {
                 int t = back ? i : 3 - i;
                 if (vertical)
-                    cv.hline(cx - t, cx + t + 1, cy - 2 + i, kGlyph);
+                    cv.hline(cx - t, cx + t + 1, cy - 2 + i, sc.label);
                 else
-                    cv.vline(cx - 2 + i, cy - t, cy + t + 1, kGlyph);
+                    cv.vline(cx - 2 + i, cy - t, cy + t + 1, sc.label);
             }
         };
         arrow(dec_a, true);
         arrow(inc_a, false);
         arrow(dec_b, true);
         arrow(inc_b, false);
-        plate(cv, thumb);
-        // Grip: four short lines at the thumb's center.
+        plate(cv, thumb, sc.thumb, sc.thumb_l, sc.thumb_d, sc.frame);
         int cx = thumb.x + thumb.w / 2, cy = thumb.y + thumb.h / 2;
         for (int i = 0; i < 4; ++i) {
             if (vertical && thumb.h > 24)
-                cv.hline(cx - 4, cx + 4, cy - 4 + i * 2, kPlateHi);
+                cv.hline(cx - 4, cx + 4, cy - 4 + i * 2, sc.thumb_l);
             else if (!vertical && thumb.w > 24)
-                cv.vline(cx - 4 + i * 2, cy - 4, cy + 4, kPlateHi);
+                cv.vline(cx - 4 + i * 2, cy - 4, cy + 4, sc.thumb_l);
         }
     }
 
@@ -244,38 +238,43 @@ struct ListPane {
 
 void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
                 bool focused) {
-    // Focus ring: red around the active pane, near-black otherwise.
+    const Theme *theme = kit_theme();
+    ListColors lc = list_colors(theme);
+    HeaderColors hc = header_colors(theme);
+
+    // Focus ring: Focus Box around the active pane, Primary Frame otherwise.
     Rect ring{p.r.x - 3, p.r.y - 3, p.r.w + 6, p.r.h + 6};
-    Color rc = focused ? kFocusBorder : kIdleBorder;
+    Color rc = focused ? lc.focus_ring : lc.idle_ring;
     cv.fill({ring.x, ring.y, ring.w, 2}, rc);
     cv.fill({ring.x, ring.bottom() - 2, ring.w, 2}, rc);
     cv.fill({ring.x, ring.y, 2, ring.h}, rc);
     cv.fill({ring.right() - 2, ring.y, 2, ring.h}, rc);
-    cv.frame({ring.x + 2, ring.y + 2, ring.w - 4, ring.h - 4}, kBlack);
+    cv.frame({ring.x + 2, ring.y + 2, ring.w - 4, ring.h - 4}, hc.frame);
 
-    // Header: a raised plate per column, white labels.
+    // Header: Column Header raised plates + Primary Label text.
     cv.set_clip(p.header);
-    cv.fill(p.header, kPlate);
+    cv.fill(p.header, hc.face);
     int x = p.header.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
-        plate(cv, {x, p.header.y, cols[i].w + 1, p.header.h});
+        plate(cv, {x, p.header.y, cols[i].w + 1, p.header.h}, hc.face,
+              hc.light, hc.dark, hc.frame);
         cv.text(x + 6, p.header.y + (p.header.h - kFontHeight) / 2 + 1,
-                cols[i].title, kWhite);
+                cols[i].title, hc.label);
         x += cols[i].w;
     }
     cv.clear_clip();
 
-    // Body: list background, the sorted column tinted, row separators.
+    // Body: List Background, sort column tint, List Separator rows.
     cv.set_clip(p.body);
-    cv.fill(p.body, kListBg);
+    cv.fill(p.body, lc.bg);
     x = p.body.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
         if (i == p.sort_col)
-            cv.fill({x, p.body.y, cols[i].w, p.body.h}, kSortBg);
+            cv.fill({x, p.body.y, cols[i].w, p.body.h}, lc.sort_bg);
         x += cols[i].w;
     }
     for (int y = p.body.y; y < p.body.bottom(); y += kRowH)
-        cv.hline(p.body.x, p.body.right(), y, kRowLine);
+        cv.hline(p.body.x, p.body.right(), y, lc.separator);
     cv.clear_clip();
 
     p.vsb.paint(cv);
@@ -283,9 +282,9 @@ void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
 }
 
 void draw_cell(Canvas &cv, int x, int w, int y, const char *text,
-               bool right_align) {
+               bool right_align, Color ink) {
     int tx = right_align ? x + w - 8 - cv.text_width(text) : x + 6;
-    cv.text(tx, y, text, kWhite);
+    cv.text(tx, y, text, ink);
 }
 
 const Column kGroupCols[] = {
@@ -382,7 +381,9 @@ void paint_tracker() {
                  g_tracker.pressed_box == 5 ? 1 : 0, settings::active_theme());
 
     Rect cl = lay.client;
-    cv.fill(cl, Color{51, 51, 51});
+    DialogColors dc = dialog_colors(settings::active_theme());
+    ListColors lc = list_colors(settings::active_theme());
+    cv.fill(cl, dc.workspace);
 
     ListPane &gp = g_tracker.groups;
     ListPane &sp = g_tracker.servers;
@@ -399,14 +400,16 @@ void paint_tracker() {
     for (int i = gp.vsb.value;
          i < kGroupCount && gp.row_rect(i).y < gp.body.bottom(); ++i) {
         Rect row = gp.row_rect(i);
-        if (i == g_tracker.sel_group)
-            cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
+        bool sel = (i == g_tracker.sel_group);
+        if (sel) cv.fill({row.x, row.y + 1, row.w, row.h - 1}, lc.hilite_bg);
+        Color ink = sel ? lc.hilite_fg : lc.label;
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
         wsprintfA(cnt, "%d", servers_in_group(kGroupNames[i]));
-        draw_cell(cv, gp.col_x(kGroupCols, 0), kGroupCols[0].w, ty, cnt, true);
+        draw_cell(cv, gp.col_x(kGroupCols, 0), kGroupCols[0].w, ty, cnt, true,
+                  ink);
         draw_cell(cv, gp.col_x(kGroupCols, 1), kGroupCols[1].w, ty,
-                  kGroupNames[i], false);
+                  kGroupNames[i], false, ink);
     }
     cv.clear_clip();
 
@@ -427,19 +430,20 @@ void paint_tracker() {
          ++i) {
         const tracker::Room &s2 = g_tracker.dir.rooms[idx[i]];
         Rect row = sp.row_rect(i);
-        if (idx[i] == g_tracker.sel_server)
-            cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
+        bool sel = (idx[i] == g_tracker.sel_server);
+        if (sel) cv.fill({row.x, row.y + 1, row.w, row.h - 1}, lc.hilite_bg);
+        Color ink = sel ? lc.hilite_fg : lc.label;
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
         wsprintfA(cnt, "%d", s2.users);
         draw_cell(cv, sp.col_x(kServerCols, 0), kServerCols[0].w, ty,
-                  s2.name.c_str(), false);
+                  s2.name.c_str(), false, ink);
         draw_cell(cv, sp.col_x(kServerCols, 1), kServerCols[1].w, ty, cnt,
-                  true);
+                  true, ink);
         draw_cell(cv, sp.col_x(kServerCols, 2), kServerCols[2].w, ty,
-                  s2.date.c_str(), false);
+                  s2.date.c_str(), false, ink);
         draw_cell(cv, sp.col_x(kServerCols, 3), kServerCols[3].w, ty,
-                  s2.description.c_str(), false);
+                  s2.description.c_str(), false, ink);
     }
     // While the directory is in flight (or unreachable) the list says so,
     // exactly where the rows would be.
@@ -455,8 +459,9 @@ void paint_tracker() {
             case tracker::Ready: msg = "No servers in this group."; break;
             default: msg = "";
         }
+        ScrollColors sc = scroll_colors(settings::active_theme());
         cv.text(sp.body.x + 6, sp.body.y + (kRowH - kFontHeight) / 2 + 1, msg,
-                kGlyph);
+                sc.label);
     }
     cv.clear_clip();
     paint_grip(cv, lay.grip, focused, settings::active_theme());
@@ -1065,9 +1070,6 @@ constexpr int kToolH = 22;   // Chat List / room tab row
 constexpr int kEntryH = 40;  // the message box
 constexpr int kTopicH = 20;
 
-const Color kChatBg{0, 0, 0};
-const Color kTabActive{136, 0, 0};
-
 struct ServerWin {
     HWND hwnd = nullptr;
     Canvas canvas;
@@ -1088,14 +1090,16 @@ struct ChatLine {
     Color fg;
 };
 
-// A sunken pane: black edge, dark face, the bevel the kit uses everywhere.
-void sunken(Canvas &cv, Rect r, Color face) {
+// A sunken pane: Primary Frame + Light/Dark bevel around a face fill.
+void sunken(Canvas &cv, Rect r, Color face, const Theme *theme) {
     cv.fill(r, face);
-    cv.frame(r, kBlack);
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kPlateLo);
-    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, kPlateLo);
-    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, kPlateHi);
-    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, kPlateHi);
+    cv.frame(r, primary_frame(theme));
+    Color lo = primary_dark(theme);
+    Color hi = primary_light(theme);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, lo);
+    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, lo);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, hi);
+    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, hi);
 }
 
 // Program art carries the launcher's #333 panel behind it; treat that as
@@ -1136,14 +1140,13 @@ std::vector<ChatLine> wrap_log(Canvas &cv, const std::vector<room::Line> &log,
     return out;
 }
 
-// The room's own tab: the same button shape held red, as KDX marks the chat
-// you are looking at.
+// The room's own tab: Column Header Hilite plate (Standard: held red).
 void draw_tab(Canvas &cv, Rect r, const char *label, bool pressed,
-              const DialogColors &dc) {
-    cv.fill(r, kTabActive);
+              const DialogColors &dc, const HeaderColors &hc) {
+    cv.fill(r, hc.hilite);
     rounded_frame(cv, r, dc.btn_frame, dc.workspace);
-    Color hi = pressed ? Color{68, 0, 0} : Color{204, 0, 0};
-    Color lo = pressed ? Color{204, 0, 0} : Color{68, 0, 0};
+    Color hi = pressed ? hc.hilite_dark : hc.hilite_light;
+    Color lo = pressed ? hc.hilite_light : hc.hilite_dark;
     cv.hline(r.x + 1, r.right() - 1, r.y + 1, hi);
     cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, hi);
     cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, lo);
@@ -1151,7 +1154,7 @@ void draw_tab(Canvas &cv, Rect r, const char *label, bool pressed,
     int off = pressed ? 1 : 0;
     blit_icon(cv, kIcChat, r.x + 6 + off, r.y + (r.h - kIcChat.h) / 2 + off);
     cv.text(r.x + 26 + off, r.y + (r.h - kFontHeight) / 2 + off, label,
-            kWhite);
+            hc.hilite_label);
 }
 
 void paint_server() {
@@ -1173,6 +1176,9 @@ void paint_server() {
                  s.pressed_box == 5 ? 1 : 0, settings::active_theme());
 
     DialogColors dc = dialog_colors(settings::active_theme());
+    HeaderColors hc = header_colors(settings::active_theme());
+    ListColors lc = list_colors(settings::active_theme());
+    const Theme *theme = settings::active_theme();
     Rect cl = s.lay.client;
     cv.fill(cl, dc.workspace);
 
@@ -1189,7 +1195,7 @@ void paint_server() {
 
     draw_button(cv, s.chat_list_btn, "Chat List", s.pressed_btn == 0, false,
                 dc);
-    draw_tab(cv, s.room_tab, name.c_str(), s.pressed_btn == 1, dc);
+    draw_tab(cv, s.room_tab, name.c_str(), s.pressed_btn == 1, dc, hc);
 
     std::vector<room::Line> log = room::log_copy();
     std::vector<ChatLine> lines = wrap_log(cv, log, s.chat.w - kSbW - 10);
@@ -1201,7 +1207,7 @@ void paint_server() {
     if (s.follow) s.chat_sb.value = s.chat_sb.max_value();
     s.chat_sb.layout();
 
-    sunken(cv, s.chat, kChatBg);
+    sunken(cv, s.chat, dc.field_bg, theme);
     cv.set_clip({s.chat.x + 2, s.chat.y + 2, s.chat.w - kSbW - 2,
                  s.chat.h - 4});
     for (int i = 0; i < rows; ++i) {
@@ -1223,7 +1229,7 @@ void paint_server() {
     s.user_sb.total = int(users.size());
     s.user_sb.layout();
 
-    sunken(cv, s.users, kChatBg);
+    sunken(cv, s.users, lc.bg, theme);
     Rect body{s.users.x + 2, s.users.y + 2, s.users.w - kSbW - 2,
               s.users.h - 4};
     cv.set_clip(body);
@@ -1233,7 +1239,7 @@ void paint_server() {
         const room::User &u = users[idx];
         Rect row{body.x, body.y + i * kUserRowH, body.w, kUserRowH};
         cv.fill(row, from_u32(u.bg));
-        cv.hline(row.x, row.right(), row.bottom() - 1, kBarBody);
+        cv.hline(row.x, row.right(), row.bottom() - 1, lc.separator);
         blit_icon(cv, kIcUsers, row.x + 4, row.y + (kUserRowH - kIcUsers.h) / 2);
         cv.text(row.x + 26, row.y + (kUserRowH - kFontHeight) / 2,
                 u.nick.c_str(), from_u32(u.fg));
@@ -1241,8 +1247,8 @@ void paint_server() {
     cv.clear_clip();
     s.user_sb.paint(cv);
 
-    // The entry box: black, with the red focus outline the real one has.
-    cv.fill(s.entry, kChatBg);
+    // The entry box: Text Box + Focus Box outline when active.
+    cv.fill(s.entry, dc.field_bg);
     cv.frame(s.entry, focused ? dc.field_focus : dc.field_frame);
     int end = cv.text(s.entry.x + 5, s.entry.y + 4, s.draft.c_str(),
                       from_u32(room::g.me.fg));
@@ -1535,17 +1541,17 @@ void draw_command(Canvas &cv, int i, bool pressed, const DialogColors &dc) {
     if (kCommands[i].icon == &kIcMessages) blit_art(cv, kWonderLight, off, off);
 }
 
-// A command button while its menu is down: the red hilite face the real
-// client shows, lit from the top and shading toward the bottom.
+// A command button while its menu is down: Button Hilite face (Standard red).
 void draw_command_hilite(Canvas &cv, int i, const DialogColors &dc) {
     Rect r = command_rect(i);
-    cv.frame(r, dc.btn_frame);
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kBright);
-    cv.hline(r.x + 1, r.right() - 1, r.y + 2, Color{170, 0, 0});
-    cv.vgradient({r.x + 1, r.y + 3, r.w - 2, r.h - 4}, Color{136, 0, 0},
-                 Color{85, 0, 0});
+    ButtonHiliteColors bh = button_hilite_colors(kit_theme());
+    cv.frame(r, bh.frame);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, bh.l2);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 2, bh.l1);
+    cv.vgradient({r.x + 1, r.y + 3, r.w - 2, r.h - 4}, bh.face, bh.d2);
     blit_art(cv, *kCommands[i].icon);
-    cv.text(36, r.y + (r.h - kFontHeight) / 2, kCommands[i].label, kWhite);
+    cv.text(36, r.y + (r.h - kFontHeight) / 2, kCommands[i].label, bh.label);
+    (void)dc;
 }
 
 void repaint(HWND hwnd) {
@@ -1564,12 +1570,18 @@ void repaint(HWND hwnd) {
     paint_chrome(cv, g_app.lay, "", g_app.focused, g_app.hot_box,
                  g_app.pressed_box, settings::active_theme());
 
-    // Centered butterfly glyph + "KDX" title, as in the real window.
+    // Centered butterfly glyph + "KDX" title (Primary Label, like chrome).
     {
         const char *title = "KDX";
         int tw = kLogoW + 6 + cv.text_width(title);
         int tx = (w - tw) / 2;
-        Color tc = g_app.focused ? kWhite : Color{204, 204, 204};
+        const Theme *theme = settings::active_theme();
+        Color tc = g_app.focused ? kWhite : kGlyphGrey;
+        if (theme && theme->has_colors) {
+            uint32_t v = theme->color(g_app.focused ? ColPrimaryLabel
+                                                    : ColPrimaryDisableLabel);
+            tc = from_u32(v);
+        }
         for (int y = 0; y < kLogoH; ++y)
             for (int x = 0; x < kLogoW; ++x)
                 if (kLogoGlyph[y] & (1 << x)) cv.put(tx + x, 5 + y, pack(tc));
@@ -1853,6 +1865,7 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     room::init();
     settings::boot();
     settings::invalidate_all = invalidate_all_windows;
+    kit_theme_fn = &settings::active_theme;
     ShowWindow(hwnd, show);
     SetTimer(hwnd, 1, 250, nullptr);
     SetTimer(hwnd, 2, 30000, nullptr);

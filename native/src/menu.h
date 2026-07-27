@@ -97,21 +97,21 @@ inline void paint(HDC hdc) {
     int w = rc.right, h = rc.bottom;
     Canvas &cv = g_menu.canvas;
     if (cv.width() != w || cv.height() != h) cv.resize(w, h);
-    UiColors uc = ui_colors(nullptr);
+    const Theme *theme = kit_theme();
+    UiColors uc = ui_colors(theme);
 
-    // An open menu wears the same red frame as a window: black edge, the
-    // lit/shaded red ramp, then the panel's own black edge and grey bevel.
-    ChromeColors cc = chrome_colors(true);
-    cv.fill({0, 0, w, h}, cc.body);
-    cv.frame({0, 0, w, h}, kBlack);
-    cv.hline(1, w - 1, 1, cc.bright);
-    cv.vline(1, 1, h - 1, cc.bright);
-    cv.hline(1, w - 1, h - 2, cc.deep);
-    cv.vline(w - 2, 1, h - 1, cc.deep);
+    // Outer ring: themed Window Focus colours (Standard: the red frame).
+    FramePalette pal = frame_palette(theme, true);
+    cv.fill({0, 0, w, h}, pal.cc.body);
+    cv.frame({0, 0, w, h}, pal.frame);
+    cv.hline(1, w - 1, 1, pal.cc.bright);
+    cv.vline(1, 1, h - 1, pal.cc.bright);
+    cv.hline(1, w - 1, h - 2, pal.cc.deep);
+    cv.vline(w - 2, 1, h - 1, pal.cc.deep);
 
     Rect r{kFrame, kFrame, w - kFrame * 2, h - kFrame * 2};
     cv.fill(r, uc.bar_body);
-    cv.frame(r, kBlack);
+    cv.frame(r, pal.frame);
     cv.hline(r.x + 1, r.right() - 1, r.y + 1, uc.bar_light);
     cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, uc.bar_light);
     cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, uc.bar_dark);
@@ -127,8 +127,13 @@ inline void paint(HDC hdc) {
         }
         Rect row{r.x + 2, top, r.w - 4, kItemH};
         bool hot = int(i) == g_menu.hot;
-        if (hot) cv.fill(row, uc.hilite);
-        Color fg = !it.enabled ? uc.bar_light : hot ? uc.hilite_text : uc.text;
+        if (hot) {
+            cv.fill(row, uc.hilite);
+            cv.hline(row.x, row.right(), row.y, uc.hilite_light);
+            cv.hline(row.x, row.right(), row.bottom() - 1, uc.hilite_dark);
+        }
+        Color fg =
+            !it.enabled ? uc.disable_text : hot ? uc.hilite_text : uc.text;
         if (it.icon.px) {
             uint32_t bg = pack(uc.bar_body);
             int iy = top + (kItemH - it.icon.h) / 2;
