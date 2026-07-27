@@ -133,4 +133,28 @@ inline void stop_hosting() {
     g.status = "Server removed from the tracker.";
 }
 
+// Same as stop_hosting, but the HTTP call runs off the UI thread so closing
+// the chat window cannot hitch the message pump on a tracker round-trip.
+inline DWORD WINAPI unregister_thread(LPVOID p) {
+    auto *h = static_cast<tracker::Hosting *>(p);
+    tracker::unregister(*h);
+    delete h;
+    return 0;
+}
+
+inline void stop_hosting_async() {
+    if (!g.hosting.active) return;
+    auto *h = new tracker::Hosting(g.hosting);
+    g.hosting.active = false;
+    g.hosting.id.clear();
+    g.hosting.token.clear();
+    g.status = "Server removed from the tracker.";
+    if (HANDLE t = CreateThread(nullptr, 0, unregister_thread, h, 0, nullptr))
+        CloseHandle(t);
+    else {
+        tracker::unregister(*h);
+        delete h;
+    }
+}
+
 }  // namespace host_room

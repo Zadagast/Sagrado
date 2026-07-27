@@ -118,6 +118,16 @@ class Client {
 
     bool send(const std::string &s) { return send(s.data(), s.size()); }
 
+    // Unblock a receive() sitting on another thread. Safe to call from the UI
+    // thread: it only starts the close handshake and does not tear handles
+    // down. close() must run after receive has returned (see room::leave).
+    void interrupt() {
+        if (!socket_) return;
+        WinHttpWebSocketShutdown(socket_,
+                                 WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,
+                                 nullptr, 0);
+    }
+
     // Blocks until a whole message arrives (fragments are reassembled), the
     // peer closes, or the socket breaks.
     bool receive(std::vector<uint8_t> &out) {
@@ -150,8 +160,9 @@ class Client {
 
     void close() {
         if (socket_) {
-            WinHttpWebSocketClose(socket_, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,
-                                  nullptr, 0);
+            // Handles only — the close handshake was interrupt() or the peer.
+            // Calling WinHttpWebSocketClose here while another thread is in
+            // Receive deadlocks under Wine (and can hang native WinHTTP too).
             WinHttpCloseHandle(socket_);
             socket_ = nullptr;
         }

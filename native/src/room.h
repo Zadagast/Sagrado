@@ -326,21 +326,29 @@ inline DWORD WINAPI session_thread(LPVOID) {
         guest_loop();
     }
     g.connected = false;
+    g.sock.close();
     if (g.running) add_line("Disconnected.");
     g.running = false;
     set_status("Disconnected.");
     return 0;
 }
 
+// Drop the session. Must be safe to call from the UI thread (chat window
+// WM_DESTROY): never tear WinHTTP handles down while the worker is blocked in
+// Receive — that deadlocks under Wine. interrupt() unblocks it; the worker
+// closes the socket; we only wait.
 inline void leave() {
-    if (!g.running && !g.connected) return;
+    if (!g.thread && !g.running && !g.connected) return;
+    g.notify = nullptr;  // window may be going away
     g.running = false;
-    g.sock.close();
+    g.sock.interrupt();
     if (g.thread) {
-        WaitForSingleObject(g.thread, 2000);
+        WaitForSingleObject(g.thread, 3000);
         CloseHandle(g.thread);
         g.thread = nullptr;
     }
+    g.sock.close();
+    g.connected = false;
     Guard lk(&g.lock);
     g.peers.clear();
     g.users.clear();
