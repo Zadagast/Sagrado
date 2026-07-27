@@ -21,6 +21,7 @@
 #include "room.h"
 #include "settings.h"
 #include "tracker.h"
+#include "winpos.h"
 
 namespace {
 
@@ -679,7 +680,11 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "tracker", true);
+            return 0;
         case WM_DESTROY:
+            winpos::remember(hwnd, "tracker", true);
             dock::forget(hwnd);
             g_tracker.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
@@ -707,9 +712,10 @@ void open_tracker(HINSTANCE hinst) {
     }
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    g_tracker.hwnd = CreateWindowExA(0, "SagradoTracker", "Tracker", WS_POPUP,
-                                     mr.right + 12, mr.top, kTrkW, kTrkH,
-                                     g_main, nullptr, hinst, nullptr);
+    int x = mr.right + 12, y = mr.top, w = kTrkW, h = kTrkH;
+    winpos::resolve("tracker", x, y, w, h, true);
+    g_tracker.hwnd = CreateWindowExA(0, "SagradoTracker", "Tracker", WS_POPUP, x,
+                                     y, w, h, g_main, nullptr, hinst, nullptr);
     ShowWindow(g_tracker.hwnd, SW_SHOW);
     SetForegroundWindow(g_tracker.hwnd);
     refresh_tracker();
@@ -841,8 +847,12 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "host", false);
+            return 0;
         case WM_DESTROY:
             // Hosting outlives the window; the launcher keeps the heartbeat.
+            winpos::remember(hwnd, "host", false);
             dock::forget(hwnd);
             g.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
@@ -870,9 +880,10 @@ void open_host_room(HINSTANCE hinst) {
     }
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    g.hwnd = CreateWindowExA(0, "SagradoHostRoom", "Host a Server", WS_POPUP,
-                             mr.right + 12, mr.top + 40, host_room::kW,
-                             host_room::kH, g_main, nullptr, hinst, nullptr);
+    int x = mr.right + 12, y = mr.top + 40, w = host_room::kW, h = host_room::kH;
+    winpos::resolve("host", x, y, w, h, false);
+    g.hwnd = CreateWindowExA(0, "SagradoHostRoom", "Host a Server", WS_POPUP, x,
+                             y, w, h, g_main, nullptr, hinst, nullptr);
     ShowWindow(g.hwnd, SW_SHOW);
     SetForegroundWindow(g.hwnd);
     SetTimer(g.hwnd, 1, 500, nullptr);  // caret blink
@@ -1086,7 +1097,11 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "settings", false);
+            return 0;
         case WM_DESTROY:
+            winpos::remember(hwnd, "settings", false);
             dock::forget(hwnd);
             settings::close_picker();
             // X / Esc go through cancel_and_close; if the window dies another
@@ -1125,9 +1140,10 @@ void open_settings(HINSTANCE hinst) {
     }
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    g.hwnd = CreateWindowExA(0, "SagradoSettings", "KDX Settings", WS_POPUP,
-                             mr.right + 12, mr.top, settings::kW, settings::kH,
-                             g_main, nullptr, hinst, nullptr);
+    int x = mr.right + 12, y = mr.top, w = settings::kW, h = settings::kH;
+    winpos::resolve("settings", x, y, w, h, false);
+    g.hwnd = CreateWindowExA(0, "SagradoSettings", "KDX Settings", WS_POPUP, x, y,
+                             w, h, g_main, nullptr, hinst, nullptr);
     ShowWindow(g.hwnd, SW_SHOW);
     SetForegroundWindow(g.hwnd);
     SetTimer(g.hwnd, 1, 500, nullptr);
@@ -1515,9 +1531,13 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "chat", true);
+            return 0;
         case WM_DESTROY:
             // Chat UI only — stay on the server. Events retarget to the
             // launcher until Chat is opened again.
+            winpos::remember(hwnd, "chat", true);
             dock::forget(hwnd);
             if (room::g.notify == hwnd) room::attach_notify(g_main);
             s.hwnd = nullptr;
@@ -1579,9 +1599,10 @@ HWND open_server_window(HINSTANCE hinst) {
     s.follow = true;
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    s.hwnd = CreateWindowExA(0, "SagradoServer", "Sagrado Server", WS_POPUP,
-                             mr.right + 12, mr.top, kSrvW, kSrvH, nullptr,
-                             nullptr, hinst, nullptr);
+    int x = mr.right + 12, y = mr.top, w = kSrvW, h = kSrvH;
+    winpos::resolve("chat", x, y, w, h, true);
+    s.hwnd = CreateWindowExA(0, "SagradoServer", "Sagrado Server", WS_POPUP, x, y,
+                             w, h, nullptr, nullptr, hinst, nullptr);
     ShowWindow(s.hwnd, SW_SHOW);
     SetForegroundWindow(s.hwnd);
     SetTimer(s.hwnd, 1, 500, nullptr);  // caret blink
@@ -1923,7 +1944,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "kdx", false);
+            return 0;
         case WM_DESTROY:
+            winpos::remember(hwnd, "kdx", false);
             disconnect_server();
             PostQuitMessage(0);
             return 0;
@@ -1944,13 +1969,15 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     wc.lpszClassName = "SagradoKDX";
     RegisterClassA(&wc);
 
+    int x = 80, y = 80, w = kWinW, h = kWinH;
+    winpos::resolve("kdx", x, y, w, h, false);
     HWND hwnd = CreateWindowExA(0, "SagradoKDX", "KDX",
-                                WS_POPUP | WS_MINIMIZEBOX, CW_USEDEFAULT,
-                                CW_USEDEFAULT, kWinW, kWinH, nullptr, nullptr,
-                                hinst, nullptr);
+                                WS_POPUP | WS_MINIMIZEBOX, x, y, w, h, nullptr,
+                                nullptr, hinst, nullptr);
     g_main = hwnd;
     room::init();
     settings::boot();
+    winpos::load();
     settings::invalidate_all = invalidate_all_windows;
     kit_theme_fn = &settings::active_theme;
     ShowWindow(hwnd, show);

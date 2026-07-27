@@ -20,6 +20,7 @@
 #include "canvas.h"
 #include "chrome.h"
 #include "controls.h"
+#include "winpos.h"
 
 namespace dock {
 
@@ -246,11 +247,12 @@ inline void ensure(HINSTANCE hinst) {
     }
     int ch = client_h_for(1);
     int w = kDockW, h = kTitleH + kBorder + ch;
-    // Park near the bottom-left of the work area, like a tray companion.
+    // Default: bottom-left of the work area; restore a saved spot if any.
     RECT wa{};
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0);
     int x = wa.left + 12;
     int y = wa.bottom - h - 12;
+    winpos::resolve("dock", x, y, w, h, false);
     g.hwnd = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, "SagradoDock",
                              "KDX Dock", WS_POPUP, x, y, w, h, nullptr,
                              nullptr, hinst, nullptr);
@@ -337,6 +339,10 @@ inline LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "dock", false);
+            assert_topmost();
+            return 0;
         case WM_ACTIVATE:
             assert_topmost();
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -352,6 +358,7 @@ inline LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DESTROY:
+            winpos::remember(hwnd, "dock", false);
             if (g.hwnd == hwnd) g.hwnd = nullptr;
             return 0;
     }
