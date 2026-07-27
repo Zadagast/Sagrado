@@ -33,7 +33,17 @@ class Canvas {
         width_ = w;
         height_ = h;
         pixels_.assign(size_t(w) * size_t(h), 0);
+        clip_ = {0, 0, w, h};
     }
+
+    // Restrict drawing to r (intersected with the canvas) until clear_clip.
+    void set_clip(Rect r) {
+        int x0 = r.x < 0 ? 0 : r.x, y0 = r.y < 0 ? 0 : r.y;
+        int x1 = r.right() > width_ ? width_ : r.right();
+        int y1 = r.bottom() > height_ ? height_ : r.bottom();
+        clip_ = {x0, y0, x1 - x0, y1 - y0};
+    }
+    void clear_clip() { clip_ = {0, 0, width_, height_}; }
     int width() const { return width_; }
     int height() const { return height_; }
     const uint32_t *data() const { return pixels_.data(); }
@@ -44,15 +54,15 @@ class Canvas {
     }
 
     void put(int x, int y, uint32_t c) {
-        if (x >= 0 && x < width_ && y >= 0 && y < height_)
-            pixels_[size_t(y) * width_ + x] = c;
+        if (clip_.contains(x, y)) pixels_[size_t(y) * width_ + x] = c;
     }
 
     void fill(Rect r, Color c) {
         uint32_t p = pack(c);
-        int x0 = r.x < 0 ? 0 : r.x, y0 = r.y < 0 ? 0 : r.y;
-        int x1 = r.right() > width_ ? width_ : r.right();
-        int y1 = r.bottom() > height_ ? height_ : r.bottom();
+        int x0 = r.x < clip_.x ? clip_.x : r.x;
+        int y0 = r.y < clip_.y ? clip_.y : r.y;
+        int x1 = r.right() > clip_.right() ? clip_.right() : r.right();
+        int y1 = r.bottom() > clip_.bottom() ? clip_.bottom() : r.bottom();
         for (int y = y0; y < y1; ++y) {
             uint32_t *row = pixels_.data() + size_t(y) * width_;
             for (int x = x0; x < x1; ++x) row[x] = p;
@@ -167,5 +177,6 @@ class Canvas {
 
   private:
     int width_ = 0, height_ = 0;
+    Rect clip_{0, 0, 0, 0};
     std::vector<uint32_t> pixels_;
 };
