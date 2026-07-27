@@ -86,8 +86,8 @@ inline void layout_size() {
     // Grow height so the client matches our button stack.
     int need = probe.client.y + ch + (h - probe.client.bottom());
     if (need < h) need = h;
-    SetWindowPos(g.hwnd, nullptr, 0, 0, w, need,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(g.hwnd, HWND_TOPMOST, 0, 0, w, need,
+                 SWP_NOMOVE | SWP_NOACTIVATE);
 }
 
 inline void paint() {
@@ -239,10 +239,12 @@ inline void ensure(HINSTANCE hinst) {
     SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0);
     int x = wa.left + 12;
     int y = wa.bottom - h - 12;
-    g.hwnd = CreateWindowExA(WS_EX_TOOLWINDOW, "SagradoDock", "KDX Dock",
-                             WS_POPUP, x, y, w, h, nullptr, nullptr, hinst,
-                             nullptr);
+    g.hwnd = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, "SagradoDock",
+                             "KDX Dock", WS_POPUP, x, y, w, h, nullptr,
+                             nullptr, hinst, nullptr);
     ShowWindow(g.hwnd, SW_SHOWNOACTIVATE);
+    SetWindowPos(g.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 inline void minimize(HWND target, const char *title, Icon icon,
@@ -258,7 +260,9 @@ inline void minimize(HWND target, const char *title, Icon icon,
     ShowWindow(target, SW_HIDE);
     layout_size();
     if (g.hwnd) {
-        ShowWindow(g.hwnd, SW_SHOW);
+        ShowWindow(g.hwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(g.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         InvalidateRect(g.hwnd, nullptr, FALSE);
         UpdateWindow(g.hwnd);
     }
