@@ -1,5 +1,9 @@
 # Surface → `.hap` contract
 
+**Process:** before creating a new widget, read
+[`hap-first.md`](hap-first.md) — probe real `.hap` colours / Images / Icons
+and write the shopping list here. Do not invent a parallel look.
+
 When you add a KDX window (or kit control), pick colours from these groups —
 do **not** hardcode Standard reds/greys. Resolve through the helpers in
 `chrome.h` / `controls.h`, with `kit_theme()` (or `settings::active_theme()`)
