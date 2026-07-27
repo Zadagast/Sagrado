@@ -1,1 +1,4 @@
 /target
+native/build/
+tracker/node_modules/
+tracker/.wrangler/

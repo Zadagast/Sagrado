@@ -1,0 +1,13 @@
+{
+  "name": "sagrado-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/api.mjs && node --experimental-websocket test/relay.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.42.0"
+  }
+}
