@@ -50,7 +50,7 @@ inline void load() {
         int x, y, w, h;
         if (sscanf(line, "%31[^=]=%d,%d,%d,%d", name, &x, &y, &w, &h) == 5) {
             Entry e{};
-            strncpy(e.name, name, sizeof(e.name) - 1);
+            snprintf(e.name, sizeof(e.name), "%s", name);
             e.x = x;
             e.y = y;
             e.w = w;
@@ -108,7 +108,7 @@ inline void put(const char *name, int x, int y, int w, int h) {
         e->h = h;
     } else {
         Entry neu{};
-        strncpy(neu.name, name, sizeof(neu.name) - 1);
+        snprintf(neu.name, sizeof(neu.name), "%s", name);
         neu.x = x;
         neu.y = y;
         neu.w = w;
