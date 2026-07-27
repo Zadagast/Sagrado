@@ -9,6 +9,7 @@
 
 #include "canvas.h"
 #include "chrome.h"
+#include "editor.h"
 
 namespace {
 
@@ -47,6 +48,11 @@ struct App {
     int total_lines = 0; // document length
     int page_lines = 1;
     Rect sb{}, up1{}, dn1{}, up2{}, dn2{}, thumb{}, track{};
+    // Editing.
+    TextDoc doc;
+    Rect editor{};       // last painted editor rect (for hit-testing)
+    bool selecting = false;
+    bool caret_on = true;
     // Appearance (.hap) support.
     Theme theme;
     bool themed = false;
@@ -106,6 +112,57 @@ void set_scroll(int v) {
     g_app.scroll = v < 0 ? 0 : (v > m ? m : v);
 }
 
+// Keep the caret line within the visible page.
+void ensure_caret_visible() {
+    Pos car = g_app.doc.caret();
+    if (car.line < g_app.scroll)
+        g_app.scroll = car.line;
+    else if (car.line >= g_app.scroll + g_app.page_lines)
+        g_app.scroll = car.line - g_app.page_lines + 1;
+    if (g_app.scroll < 0) g_app.scroll = 0;
+}
+
+// Restart the caret blink in the "on" phase after any edit or move.
+void wake_caret() { g_app.caret_on = true; }
+
+void clipboard_copy(HWND hwnd, const std::string &s) {
+    if (s.empty() || !OpenClipboard(hwnd)) return;
+    EmptyClipboard();
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, s.size() + 1);
+    if (h) {
+        char *p = static_cast<char *>(GlobalLock(h));
+        memcpy(p, s.c_str(), s.size() + 1);
+        GlobalUnlock(h);
+        SetClipboardData(CF_TEXT, h);
+    }
+    CloseClipboard();
+}
+
+std::string clipboard_paste(HWND hwnd) {
+    std::string out;
+    if (!OpenClipboard(hwnd)) return out;
+    HANDLE h = GetClipboardData(CF_TEXT);
+    if (h) {
+        const char *p = static_cast<const char *>(GlobalLock(h));
+        if (p) out = p;
+        GlobalUnlock(h);
+    }
+    CloseClipboard();
+    return out;
+}
+
+// Document position under a client point (clamped into the editor).
+Pos pos_at(int px, int py) {
+    const Rect &e = g_app.editor;
+    const int pad = 4;
+    int line = g_app.scroll + (py - e.y - pad) / kLineH;
+    if (line < 0) line = 0;
+    if (line >= g_app.doc.line_count()) line = g_app.doc.line_count() - 1;
+    int col = g_app.canvas.col_at_x(g_app.doc.line(line).c_str(),
+                                    px - e.x - pad);
+    return {line, col};
+}
+
 void paint_content(Canvas &cv, const ChromeLayout &lay) {
     Rect c = lay.client;
     const Theme *theme = active_theme();
@@ -158,57 +215,45 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
     cv.frame({tab.x + 8, tab.y + 7, 10, 10}, kDeep);
     cv.text(tab.x + 24, tab.y + 4, "Untitled", tab_text);
 
-    // Editor area: black, scrollable sample document.
+    // Editor area: the document, with selection highlight and caret.
     Rect editor{c.x, strip.bottom(), c.w - kScrollbar,
                 c.bottom() - strip.bottom()};
+    g_app.editor = editor;
     cv.fill({c.x, strip.bottom(), c.w, c.bottom() - strip.bottom()},
             uc.editor_bg);
-    static const char *kPoem[] = {
-        "'Twas brillig, and the slithy toves",
-        "Did gyre and gimble in the wabe;",
-        "All mimsy were the borogoves,",
-        "And the mome raths outgrabe.",
-        "",
-        "'Beware the Jabberwock, my son!",
-        "The jaws that bite, the claws that catch!",
-        "Beware the Jubjub bird, and shun",
-        "The frumious Bandersnatch!'",
-        "",
-        "He took his vorpal sword in hand:",
-        "Long time the manxome foe he sought--",
-        "So rested he by the Tumtum tree,",
-        "And stood awhile in thought.",
-        "",
-        "And as in uffish thought he stood,",
-        "The Jabberwock, with eyes of flame,",
-        "Came whiffling through the tulgey wood,",
-        "And burbled as it came!",
-        "",
-        "One, two! One, two! And through and through",
-        "The vorpal blade went snicker-snack!",
-        "He left it dead, and with its head",
-        "He went galumphing back.",
-        "",
-        "'And hast thou slain the Jabberwock?",
-        "Come to my arms, my beamish boy!",
-        "O frabjous day! Callooh! Callay!'",
-        "He chortled in his joy.",
-        "",
-        "'Twas brillig, and the slithy toves",
-        "Did gyre and gimble in the wabe;",
-        "All mimsy were the borogoves,",
-        "And the mome raths outgrabe.",
-    };
-    g_app.total_lines = int(sizeof(kPoem) / sizeof(kPoem[0]));
+    const TextDoc &doc = g_app.doc;
+    g_app.total_lines = doc.line_count();
     g_app.page_lines = (editor.h - 8) / kLineH;
     if (g_app.page_lines < 1) g_app.page_lines = 1;
     set_scroll(g_app.scroll);
-    int y = editor.y + 4;
+    const int pad = 4;
+    bool sel = doc.has_selection();
+    Pos lo = doc.sel_lo(), hi = doc.sel_hi();
+    int y = editor.y + pad;
     for (int i = g_app.scroll;
          i < g_app.total_lines && y + kFontHeight <= editor.bottom() - 2;
          ++i) {
-        cv.text(editor.x + 4, y, kPoem[i], uc.editor_fg);
+        const std::string &ln = doc.line(i);
+        // Selection band for this line.
+        if (sel && i >= lo.line && i <= hi.line) {
+            int c0 = (i == lo.line) ? lo.col : 0;
+            int c1 = (i == hi.line) ? hi.col : int(ln.size());
+            int sx = editor.x + pad + cv.text_width_n(ln.c_str(), c0);
+            int sw = cv.text_width_n(ln.c_str() + c0, c1 - c0);
+            if (i < hi.line) sw += 4; // show the trailing newline
+            cv.fill({sx, y - 1, sw, kLineH}, uc.hilite);
+        }
+        cv.text(editor.x + pad, y, ln.c_str(), uc.editor_fg);
         y += kLineH;
+    }
+    // Caret: a blinking vertical bar at the caret column when focused.
+    Pos car = doc.caret();
+    if (g_app.focused && g_app.caret_on && car.line >= g_app.scroll &&
+        car.line < g_app.scroll + g_app.page_lines) {
+        int cx = editor.x + pad +
+                 cv.text_width_n(doc.line(car.line).c_str(), car.col);
+        int cy = editor.y + pad + (car.line - g_app.scroll) * kLineH;
+        cv.vline(cx, cy - 1, cy + kFontHeight + 1, uc.editor_fg);
     }
 
     // Vertical scrollbar, stopping above the grow box.
@@ -506,6 +551,17 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
+            // Click in the editor: place the caret, begin selection.
+            if (g_app.editor.contains(x, y)) {
+                bool extend = GetKeyState(VK_SHIFT) < 0;
+                g_app.doc.set_caret(pos_at(x, y), extend);
+                g_app.selecting = true;
+                wake_caret();
+                SetCapture(hwnd);
+                SetFocus(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             // Native move / resize: hand off to Windows' own modal
             // move/size loop (what DefWindowProc runs for SC_MOVE/SC_SIZE).
             if (g_app.lay.grip.contains(x, y) ||
@@ -530,6 +586,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return 0;
             }
+            if (g_app.selecting) {
+                g_app.doc.set_caret(pos_at(x, y), true);
+                ensure_caret_visible();
+                wake_caret();
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (g_app.open_menu >= 0) {
                 int hot = dropdown_index(x, y);
                 if (hot != g_app.hot_item) {
@@ -552,13 +615,81 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
-        case WM_KEYDOWN:
+        case WM_KEYDOWN: {
             if (wp == VK_ESCAPE && g_app.open_menu >= 0) {
                 g_app.open_menu = -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
             }
+            bool shift = GetKeyState(VK_SHIFT) < 0;
+            bool ctrl = GetKeyState(VK_CONTROL) < 0;
+            TextDoc &d = g_app.doc;
+            switch (wp) {
+                case VK_LEFT: d.move_left(shift); break;
+                case VK_RIGHT: d.move_right(shift); break;
+                case VK_UP: d.move_up(shift); break;
+                case VK_DOWN: d.move_down(shift); break;
+                case VK_HOME: d.move_home(shift); break;
+                case VK_END: d.move_end(shift); break;
+                case VK_PRIOR: // Page Up
+                    for (int i = 0; i < g_app.page_lines; ++i) d.move_up(shift);
+                    break;
+                case VK_NEXT: // Page Down
+                    for (int i = 0; i < g_app.page_lines; ++i)
+                        d.move_down(shift);
+                    break;
+                case VK_BACK: d.backspace(); break;
+                case VK_DELETE: d.del_forward(); break;
+                case 'A':
+                    if (ctrl) d.select_all(); else return 0;
+                    break;
+                case 'C':
+                    if (ctrl) clipboard_copy(hwnd, d.selected_text());
+                    else return 0;
+                    break;
+                case 'X':
+                    if (ctrl) {
+                        clipboard_copy(hwnd, d.selected_text());
+                        d.insert_text("");
+                    } else return 0;
+                    break;
+                case 'V':
+                    if (ctrl) d.insert_text(clipboard_paste(hwnd));
+                    else return 0;
+                    break;
+                default:
+                    return 0;
+            }
+            ensure_caret_visible();
+            wake_caret();
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
+        }
+        case WM_CHAR: {
+            char ch = char(wp);
+            if (ch == '\r') {
+                g_app.doc.newline();
+            } else if (ch == '\t') {
+                g_app.doc.type_char(' ');
+                g_app.doc.type_char(' ');
+                g_app.doc.type_char(' ');
+                g_app.doc.type_char(' ');
+            } else if ((unsigned char)ch >= 32 && (unsigned char)ch < 127) {
+                g_app.doc.type_char(ch);
+            } else {
+                return 0;
+            }
+            ensure_caret_visible();
+            wake_caret();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         case WM_LBUTTONUP: {
+            if (g_app.selecting) {
+                g_app.selecting = false;
+                ReleaseCapture();
+                return 0;
+            }
             if (g_app.drag_mode) {
                 int mode = g_app.drag_mode;
                 g_app.drag_mode = 0;
@@ -601,6 +732,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_app.focused = f;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+            // Blink the caret (~500ms) while focused and not selecting.
+            static int tick = 0;
+            if (++tick % 2 == 0 && g_app.focused && !g_app.selecting) {
+                g_app.caret_on = !g_app.caret_on;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             return 0;
         }
         case WM_SIZE:
@@ -627,6 +764,16 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     discover_haps();
+    g_app.doc.set_text(
+        "'Twas brillig, and the slithy toves\n"
+        "Did gyre and gimble in the wabe;\n"
+        "All mimsy were the borogoves,\n"
+        "And the mome raths outgrabe.\n"
+        "\n"
+        "Type here -- this is a real editor now: click to place the "
+        "caret,\n"
+        "drag to select, and the usual keys work (arrows, Home/End,\n"
+        "PageUp/Down, Backspace/Delete, Enter, Ctrl+A/C/X/V).");
 
     WNDCLASSA wc{};
     wc.lpfnWndProc = wnd_proc;

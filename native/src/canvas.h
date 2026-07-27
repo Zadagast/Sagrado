@@ -125,6 +125,25 @@ class Canvas {
         return w;
     }
 
+    // Width of the first n characters (for caret / selection geometry).
+    int text_width_n(const char *s, int n) const {
+        int w = 0;
+        for (int i = 0; i < n && s[i]; ++i)
+            if (s[i] >= 32 && s[i] < 127) w += kFont[s[i] - 32].advance;
+        return w;
+    }
+
+    // Column whose left edge is nearest to pixel offset px within string s.
+    int col_at_x(const char *s, int px) const {
+        int w = 0, i = 0;
+        for (; s[i]; ++i) {
+            int adv = (s[i] >= 32 && s[i] < 127) ? kFont[s[i] - 32].advance : 0;
+            if (px < w + adv / 2) return i;
+            w += adv;
+        }
+        return i;
+    }
+
     // Draw text with the built-in KDX pixel font. Returns the end x.
     int text(int x, int y, const char *s, Color c) {
         uint32_t p = pack(c);
