@@ -14,6 +14,7 @@
 #include "canvas.h"
 #include "chrome.h"
 #include "controls.h"
+#include "dock.h"
 #include "kdx_art.h"
 #include "host_room.h"
 #include "menu.h"
@@ -61,10 +62,66 @@ struct App {
     int pressed_btn = -1;
     int menu_btn = -1;  // command button holding its menu open
     int connections = 0, transfers = 0;
+    TitleDrag title_drag{};
 } g_app;
 
 HWND g_main = nullptr;
 HINSTANCE g_hinst = nullptr;
+
+dock::Icon dock_icon(const ArtImage &a) { return {a.w, a.h, a.px}; }
+
+void dock_minimize(HWND hwnd, const char *title, const ArtImage *art) {
+    dock::Icon ic{};
+    if (art) ic = dock_icon(*art);
+    dock::minimize(hwnd, title, ic, g_hinst);
+}
+
+// Hit a title-bar control. Sets pressed_box for close/min/max, or arms
+// title_drag for an empty title click. Returns true if the click was chrome.
+bool chrome_press(HWND hwnd, const ChromeLayout &lay, int &pressed_box,
+                  TitleDrag &title_drag, int x, int y) {
+    int box = chrome_box_at(lay, x, y);
+    if (box == ChromeClose || box == ChromeMin || box == ChromeMax) {
+        pressed_box = box;
+        SetCapture(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    }
+    if (box == ChromeHatch) return true;  // reserved: Window Menu
+    if (y < lay.title_h) {
+        title_drag.arm(x, y);
+        SetCapture(hwnd);
+        return true;
+    }
+    return false;
+}
+
+// Finish a chrome press. Invokes on_close / on_min when the release stays
+// on the same box. Returns true if a chrome press was in flight.
+bool chrome_release(ChromeLayout &lay, int &pressed_box, TitleDrag &title_drag,
+                    int x, int y, HWND hwnd, void (*on_close)(HWND),
+                    void (*on_min)(HWND)) {
+    bool had_title = title_drag.armed;
+    title_drag.clear();
+    if (pressed_box) {
+        int was = pressed_box;
+        pressed_box = 0;
+        ReleaseCapture();
+        if (chrome_box_at(lay, x, y) == was) {
+            if (was == ChromeClose && on_close) on_close(hwnd);
+            else if (was == ChromeMin && on_min) on_min(hwnd);
+            else InvalidateRect(hwnd, nullptr, FALSE);
+        } else {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return true;
+    }
+    if (had_title) {
+        ReleaseCapture();
+        return true;
+    }
+    return false;
+}
 
 // --- Tracker window ------------------------------------------------------
 // Modeled on the real KDX tracker: a groups table on top, the selected
@@ -320,6 +377,7 @@ struct TrackerWnd {
     ListPane groups, servers;
     ScrollBar *drag = nullptr;
     int drag_grab = 0;
+    TitleDrag title_drag{};
 } g_tracker;
 
 int servers_in_group(const char *g) {
@@ -375,10 +433,10 @@ void paint_tracker() {
     g_tracker.focused = focused;
 
     ChromeLayout lay = chrome_layout(w, h, settings::active_theme(), focused);
-    lay.max_box = {0, 0, 0, 0};
+    chrome_dialog_boxes(lay);
     g_tracker.lay = lay;
     paint_chrome(cv, lay, "Tracker: Sagrado Tracker", focused, 0,
-                 g_tracker.pressed_box == 5 ? 1 : 0, settings::active_theme());
+                 g_tracker.pressed_box, settings::active_theme());
 
     Rect cl = lay.client;
     DialogColors dc = dialog_colors(settings::active_theme());
@@ -484,6 +542,10 @@ void join_selected() {
 }
 
 LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto min_tracker = [](HWND h) {
+        dock_minimize(h, "Tracker: Sagrado Tracker", &kIcConnect);
+    };
+    auto close_tracker = [](HWND h) { DestroyWindow(h); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -492,16 +554,9 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g_tracker.lay.close_box.contains(x, y)) {
-                g_tracker.pressed_box = 5;
-                SetCapture(hwnd);
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_press(hwnd, g_tracker.lay, g_tracker.pressed_box,
+                             g_tracker.title_drag, x, y))
                 return 0;
-            }
-            if (g_tracker.lay.min_box.contains(x, y)) {
-                CloseWindow(hwnd);
-                return 0;
-            }
             ScrollBar *bars[] = {&g_tracker.groups.vsb, &g_tracker.groups.hsb,
                                  &g_tracker.servers.vsb,
                                  &g_tracker.servers.hsb};
@@ -540,10 +595,22 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (g_tracker.lay.grip.contains(x, y))
                 SendMessage(hwnd, WM_SYSCOMMAND, SC_SIZE + 8, lp);
-            else if (y < g_tracker.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
             return 0;
         }
+        case WM_MOUSEMOVE:
+            if (g_tracker.title_drag.armed) {
+                g_tracker.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                                GET_Y_LPARAM(lp), lp);
+                return 0;
+            }
+            if (g_tracker.drag) {
+                g_tracker.drag->drag_to(
+                    (g_tracker.drag->vertical ? GET_Y_LPARAM(lp)
+                                              : GET_X_LPARAM(lp)) -
+                    g_tracker.drag_grab);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
         case WM_SIZE:
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -558,14 +625,6 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_TIMER:
             refresh_tracker();
-            return 0;
-        case WM_MOUSEMOVE:
-            if (g_tracker.drag) {
-                int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-                g_tracker.drag->drag_to(
-                    (g_tracker.drag->vertical ? y : x) - g_tracker.drag_grab);
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
             return 0;
         case WM_MOUSEWHEEL: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -584,22 +643,22 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_tracker.drag = nullptr;
                 return 0;
             }
-            if (g_tracker.pressed_box == 5) {
-                ReleaseCapture();
-                g_tracker.pressed_box = 0;
-                if (g_tracker.lay.close_box.contains(GET_X_LPARAM(lp),
-                                                     GET_Y_LPARAM(lp))) {
-                    DestroyWindow(hwnd);
-                    return 0;
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_release(g_tracker.lay, g_tracker.pressed_box,
+                               g_tracker.title_drag, GET_X_LPARAM(lp),
+                               GET_Y_LPARAM(lp), hwnd, close_tracker,
+                               min_tracker))
+                return 0;
+            return 0;
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g_tracker.lay.title_h &&
+                chrome_box_at(g_tracker.lay, x, y) == ChromeNone) {
+                min_tracker(hwnd);
+                return 0;
             }
+            if (g_tracker.servers.body.contains(x, y)) join_selected();
             return 0;
-        case WM_LBUTTONDBLCLK:
-            if (g_tracker.servers.body.contains(GET_X_LPARAM(lp),
-                                                GET_Y_LPARAM(lp)))
-                join_selected();
-            return 0;
+        }
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) DestroyWindow(hwnd);
             if (wp == VK_F5) refresh_tracker();
@@ -621,6 +680,7 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DESTROY:
+            dock::forget(hwnd);
             g_tracker.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
             return 0;
@@ -630,7 +690,7 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 void open_tracker(HINSTANCE hinst) {
     if (g_tracker.hwnd) {
-        SetForegroundWindow(g_tracker.hwnd);
+        dock::restore_hwnd(g_tracker.hwnd);
         return;
     }
     static bool registered = false;
@@ -663,6 +723,10 @@ void start_session(room::Role role, const std::string &id,
 
 LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     host_room::Window &g = host_room::g;
+    auto min_host = [](HWND h) {
+        dock_minimize(h, "Host a Server", &kIcCommands);
+    };
+    auto close_host = [](HWND h) { DestroyWindow(h); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -671,10 +735,8 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g.lay.close_box.contains(x, y)) {
-                DestroyWindow(hwnd);
+            if (chrome_press(hwnd, g.lay, g.pressed_box, g.title_drag, x, y))
                 return 0;
-            }
             for (int i = 0; i < 2; ++i)
                 if (g.field[i].contains(x, y)) {
                     g.focus = i;
@@ -692,12 +754,24 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
-            if (y < g.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
             return 0;
         }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g.lay.title_h && chrome_box_at(g.lay, x, y) == ChromeNone)
+                min_host(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (g.title_drag.armed)
+                g.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                        GET_Y_LPARAM(lp), lp);
+            return 0;
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (chrome_release(g.lay, g.pressed_box, g.title_drag, x, y, hwnd,
+                               close_host, min_host))
+                return 0;
             if (g.pressed_btn >= 0) {
                 ReleaseCapture();
                 int was = g.pressed_btn;
@@ -769,6 +843,7 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_DESTROY:
             // Hosting outlives the window; the launcher keeps the heartbeat.
+            dock::forget(hwnd);
             g.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
             return 0;
@@ -779,12 +854,13 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 void open_host_room(HINSTANCE hinst) {
     host_room::Window &g = host_room::g;
     if (g.hwnd) {
-        SetForegroundWindow(g.hwnd);
+        dock::restore_hwnd(g.hwnd);
         return;
     }
     static bool registered = false;
     if (!registered) {
         WNDCLASSA wc{};
+        wc.style = CS_DBLCLKS;
         wc.lpfnWndProc = host_proc;
         wc.hInstance = hinst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -816,10 +892,15 @@ void invalidate_all_windows() {
     bump(host_room::g.hwnd);
     bump(settings::g.hwnd);
     bump(FindWindowA("SagradoServer", nullptr));
+    bump(dock::g.hwnd);
 }
 
 LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     settings::Window &g = settings::g;
+    auto min_settings = [](HWND h) {
+        dock_minimize(h, "Settings", &kIcSettings);
+    };
+    auto close_settings = [](HWND) { settings::cancel_and_close(); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -832,16 +913,8 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             RECT rc;
             GetClientRect(hwnd, &rc);
             settings::layout(rc.right, rc.bottom);
-            if (g.lay.close_box.contains(x, y)) {
-                g.pressed_box = 5;
-                SetCapture(hwnd);
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_press(hwnd, g.lay, g.pressed_box, g.title_drag, x, y))
                 return 0;
-            }
-            if (g.lay.min_box.contains(x, y)) {
-                CloseWindow(hwnd);
-                return 0;
-            }
             auto press = [&](int id, Rect r) {
                 if (!r.contains(x, y)) return false;
                 g.pressed_btn = id;
@@ -892,21 +965,24 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     press(7, g.font_files) || press(8, g.font_users))
                     return 0;
             }
-            if (y < g.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
             return 0;
         }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g.lay.title_h && chrome_box_at(g.lay, x, y) == ChromeNone)
+                min_settings(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (g.title_drag.armed)
+                g.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                        GET_Y_LPARAM(lp), lp);
+            return 0;
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g.pressed_box == 5) {
-                ReleaseCapture();
-                g.pressed_box = 0;
-                if (g.lay.close_box.contains(x, y))
-                    settings::cancel_and_close();
-                else
-                    InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_release(g.lay, g.pressed_box, g.title_drag, x, y, hwnd,
+                               close_settings, min_settings))
                 return 0;
-            }
             if (g.pressed_btn >= 0) {
                 ReleaseCapture();
                 int was = g.pressed_btn;
@@ -1011,6 +1087,7 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DESTROY:
+            dock::forget(hwnd);
             settings::close_picker();
             // X / Esc go through cancel_and_close; if the window dies another
             // way, still drop an uncommitted preview.
@@ -1029,7 +1106,7 @@ LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 void open_settings(HINSTANCE hinst) {
     settings::Window &g = settings::g;
     if (g.hwnd) {
-        SetForegroundWindow(g.hwnd);
+        dock::restore_hwnd(g.hwnd);
         return;
     }
     settings::g_draft = settings::g_prefs;
@@ -1038,6 +1115,7 @@ void open_settings(HINSTANCE hinst) {
     static bool registered = false;
     if (!registered) {
         WNDCLASSA wc{};
+        wc.style = CS_DBLCLKS;
         wc.lpfnWndProc = settings_proc;
         wc.hInstance = hinst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -1083,6 +1161,7 @@ struct ServerWin {
     ScrollBar *drag = nullptr;
     int drag_grab = 0;
     bool follow = true;  // stay pinned to the newest line
+    TitleDrag title_drag{};
 } g_server;
 
 struct ChatLine {
@@ -1167,13 +1246,13 @@ void paint_server() {
         cv.resize(rc.right, rc.bottom);
     bool focused = GetForegroundWindow() == s.hwnd;
     s.lay = chrome_layout(rc.right, rc.bottom, settings::active_theme(), focused);
-    s.lay.max_box = {0, 0, 0, 0};
+    chrome_dialog_boxes(s.lay);
 
     std::string name = room::name_copy();
     if (name.empty()) name = "Sagrado Server";
     std::string title = "Chat: " + name;
-    paint_chrome(cv, s.lay, title.c_str(), focused, 0,
-                 s.pressed_box == 5 ? 1 : 0, settings::active_theme());
+    paint_chrome(cv, s.lay, title.c_str(), focused, 0, s.pressed_box,
+                 settings::active_theme());
 
     DialogColors dc = dialog_colors(settings::active_theme());
     HeaderColors hc = header_colors(settings::active_theme());
@@ -1291,6 +1370,13 @@ void refresh_connection_count() {
 
 LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     ServerWin &s = g_server;
+    auto min_chat = [](HWND h) {
+        std::string name = room::name_copy();
+        if (name.empty()) name = "Sagrado Server";
+        std::string title = "Chat: " + name;
+        dock_minimize(h, title.c_str(), &kIcChat);
+    };
+    auto close_chat = [](HWND h) { DestroyWindow(h); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -1299,16 +1385,8 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (s.lay.close_box.contains(x, y)) {
-                s.pressed_box = 5;
-                SetCapture(hwnd);
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_press(hwnd, s.lay, s.pressed_box, s.title_drag, x, y))
                 return 0;
-            }
-            if (s.lay.min_box.contains(x, y)) {
-                CloseWindow(hwnd);
-                return 0;
-            }
             int hit = s.chat_sb.on_press(x, y);
             if (hit) {
                 s.follow = s.chat_sb.value >= s.chat_sb.max_value();
@@ -1344,11 +1422,20 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (s.lay.grip.contains(x, y))
                 SendMessage(hwnd, WM_SYSCOMMAND, SC_SIZE + 8, lp);
-            else if (y < s.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return 0;
+        }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < s.lay.title_h && chrome_box_at(s.lay, x, y) == ChromeNone)
+                min_chat(hwnd);
             return 0;
         }
         case WM_MOUSEMOVE:
+            if (s.title_drag.armed) {
+                s.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                        GET_Y_LPARAM(lp), lp);
+                return 0;
+            }
             if (s.drag) {
                 s.drag->drag_to(GET_Y_LPARAM(lp) - s.drag_grab);
                 if (s.drag == &s.chat_sb)
@@ -1362,16 +1449,10 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 s.drag = nullptr;
                 return 0;
             }
-            if (s.pressed_box == 5) {
-                ReleaseCapture();
-                s.pressed_box = 0;
-                if (s.lay.close_box.contains(GET_X_LPARAM(lp),
-                                             GET_Y_LPARAM(lp))) {
-                    DestroyWindow(hwnd);
-                    return 0;
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
+            if (chrome_release(s.lay, s.pressed_box, s.title_drag,
+                               GET_X_LPARAM(lp), GET_Y_LPARAM(lp), hwnd,
+                               close_chat, min_chat))
+                return 0;
             if (s.pressed_btn >= 0) {
                 ReleaseCapture();
                 s.pressed_btn = -1;
@@ -1437,6 +1518,7 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DESTROY:
             // Chat UI only — stay on the server. Events retarget to the
             // launcher until Chat is opened again.
+            dock::forget(hwnd);
             if (room::g.notify == hwnd) room::attach_notify(g_main);
             s.hwnd = nullptr;
             if (g_main) {
@@ -1464,8 +1546,7 @@ void start_session(room::Role role, const std::string &id,
 // this window does not leave the server. Offline, Chat opens Connect...
 void open_chat() {
     if (g_server.hwnd) {
-        ShowWindow(g_server.hwnd, SW_RESTORE);
-        SetForegroundWindow(g_server.hwnd);
+        dock::restore_hwnd(g_server.hwnd);
         return;
     }
     if (room::on_server() || host_room::g.hosting.active) {
@@ -1480,12 +1561,13 @@ void open_chat() {
 HWND open_server_window(HINSTANCE hinst) {
     ServerWin &s = g_server;
     if (s.hwnd) {
-        SetForegroundWindow(s.hwnd);
+        dock::restore_hwnd(s.hwnd);
         return s.hwnd;
     }
     static bool registered = false;
     if (!registered) {
         WNDCLASSA wc{};
+        wc.style = CS_DBLCLKS;
         wc.lpfnWndProc = server_proc;
         wc.hInstance = hinst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -1743,6 +1825,7 @@ void run_command(int i, HWND hwnd) {
 }
 
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto min_main = [](HWND h) { dock_minimize(h, "KDX", &kIcCommands); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -1751,12 +1834,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g_app.lay.min_box.contains(x, y)) {
-                g_app.pressed_box = 4;
-                SetCapture(hwnd);
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_press(hwnd, g_app.lay, g_app.pressed_box,
+                             g_app.title_drag, x, y))
                 return 0;
-            }
             int b = button_at(x, y);
             if (b >= 0) {
                 g_app.pressed_btn = b;
@@ -1771,19 +1851,25 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return 0;
             }
-            if (y < g_app.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
             return 0;
         }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g_app.lay.title_h &&
+                chrome_box_at(g_app.lay, x, y) == ChromeNone)
+                min_main(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (g_app.title_drag.armed)
+                g_app.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                            GET_Y_LPARAM(lp), lp);
+            return 0;
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g_app.pressed_box == 4) {
-                ReleaseCapture();
-                g_app.pressed_box = 0;
-                InvalidateRect(hwnd, nullptr, FALSE);
-                if (g_app.lay.min_box.contains(x, y)) CloseWindow(hwnd);
+            if (chrome_release(g_app.lay, g_app.pressed_box, g_app.title_drag,
+                               x, y, hwnd, nullptr, min_main))
                 return 0;
-            }
             if (g_app.pressed_btn >= 0) {
                 ReleaseCapture();
                 int was = g_app.pressed_btn;
@@ -1851,6 +1937,7 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     g_hinst = hinst;
 
     WNDCLASSA wc{};
+    wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = hinst;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);

@@ -2,6 +2,9 @@
 // real Haxial TextEdit: one solid red slab (title bar + borders) with the
 // client area cut out, lit from the top-left.
 #pragma once
+#include <windows.h>
+#include <cstdlib>
+
 #include "canvas.h"
 
 // Standard color ramp (Haxial Standard color table entries 36..40).
@@ -471,6 +474,58 @@ inline const Theme *(*kit_theme_fn)() = nullptr;
 inline const Theme *kit_theme() {
     return kit_theme_fn ? kit_theme_fn() : nullptr;
 }
+
+// Title-bar control ids — match paint_chrome's pressed_box convention
+// (1 = close, 3 = maximize, 4 = minimize). Hatch is hit-tested but has no
+// pressed art until Window Menu is wired.
+enum ChromeBox : int {
+    ChromeNone = 0,
+    ChromeClose = 1,
+    ChromeHatch = 2,
+    ChromeMax = 3,
+    ChromeMin = 4,
+};
+
+inline int chrome_box_at(const ChromeLayout &lay, int x, int y) {
+    if (lay.close_box.contains(x, y)) return ChromeClose;
+    if (lay.hatch_box.contains(x, y)) return ChromeHatch;
+    if (lay.max_box.contains(x, y)) return ChromeMax;
+    if (lay.min_box.contains(x, y)) return ChromeMin;
+    return ChromeNone;
+}
+
+// Dialogs and most KDX tool windows hide maximize and the Window Menu hatch
+// until those features exist; callers still keep minimize + close.
+inline void chrome_dialog_boxes(ChromeLayout &lay) {
+    lay.max_box = {0, 0, 0, 0};
+    lay.hatch_box = {0, 0, 0, 0};
+}
+
+// Deferred title-bar drag so a double-click can minimize (Haxial) instead of
+// always starting SC_MOVE on the first down.
+struct TitleDrag {
+    bool armed = false;
+    int x0 = 0, y0 = 0;
+
+    void arm(int x, int y) {
+        armed = true;
+        x0 = x;
+        y0 = y;
+    }
+    void clear() { armed = false; }
+
+    // Returns true if a drag was started (caller should stop handling).
+    bool maybe_drag(HWND hwnd, int x, int y, LPARAM lp) {
+        if (!armed) return false;
+        if (abs(x - x0) > 3 || abs(y - y0) > 3) {
+            armed = false;
+            ReleaseCapture();
+            SendMessageA(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return true;
+        }
+        return false;
+    }
+};
 
 // A raised bar (menu bar / tab strip base), lit from the top.
 inline void raised_bar(Canvas &cv, Rect r,

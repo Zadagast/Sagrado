@@ -29,6 +29,7 @@ struct Window {
     bool caret = true;
     int pressed_btn = -1;  // 0 host/stop, 1 close
     int group = 4;         // General
+    TitleDrag title_drag{};
     std::string name, description;
     std::string status;
     bool busy = false;
@@ -46,7 +47,7 @@ inline std::string *focused_text() {
 inline void layout(int w, int h) {
     g.lay = chrome_layout(w, h, settings::active_theme(),
                           GetForegroundWindow() == g.hwnd);
-    g.lay.max_box = {0, 0, 0, 0};
+    chrome_dialog_boxes(g.lay);
     g.lay.grip = {0, 0, 0, 0};
     int lx = g.lay.client.x + 14, fx = lx + 96;
     int fw = g.lay.client.right() - 14 - fx;
@@ -70,8 +71,8 @@ inline void paint() {
         cv.resize(rc.right, rc.bottom);
     bool focused = GetForegroundWindow() == g.hwnd;
     layout(rc.right, rc.bottom);
-    paint_chrome(cv, g.lay, "Host a Server", focused, 0,
-                 g.pressed_box == 5 ? 1 : 0, settings::active_theme());
+    paint_chrome(cv, g.lay, "Host a Server", focused, 0, g.pressed_box,
+                 settings::active_theme());
 
     DialogColors dc = dialog_colors(settings::active_theme());
     cv.fill(g.lay.client, dc.workspace);

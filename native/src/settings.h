@@ -213,6 +213,7 @@ struct Window {
     int focus = FocusName;
     bool caret = true;
     int color_target = 0;  // 0 fg, 1 bg when picking
+    TitleDrag title_drag{};
     Rect cat{}, cancel{}, apply{}, save{};
     Rect name{}, desc{}, fg_sw{}, bg_sw{}, icon{};
     Rect appearance{}, chk_file{}, chk_user{}, chk_bar{};
@@ -232,9 +233,8 @@ inline void request_redraw_all() {
 
 inline void layout(int w, int h) {
     g.lay = chrome_layout(w, h, active_theme(), GetForegroundWindow() == g.hwnd);
-    g.lay.max_box = {0, 0, 0, 0};
+    chrome_dialog_boxes(g.lay);
     g.lay.grip = {0, 0, 0, 0};
-    g.lay.hatch_box = {0, 0, 0, 0};
     Rect cl = g.lay.client;
     int y = cl.y + 8;
     g.cat = {cl.x + 10, y, 120, 24};
@@ -325,7 +325,7 @@ inline void paint() {
     layout(rc.right, rc.bottom);
     const Theme *theme = active_theme();
     paint_chrome(g.canvas, g.lay, "KDX Settings", focused, 0,
-                 g.pressed_box == 5 ? 1 : 0, theme);
+                 g.pressed_box, theme);
     DialogColors dc = dialog_colors(theme);
     g.canvas.fill(g.lay.client, dc.workspace);
 

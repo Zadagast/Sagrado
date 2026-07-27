@@ -67,6 +67,15 @@ kit surfaces that cannot take a `Theme*` (popup menus) still resolve colours.
 - Open Commands row: Button Hilite group
 - Footer counters: Primary Label
 - Commands popup: Menu group (above)
+- Minimize → **KDX Dock** (not OS iconify)
+
+### KDX Dock
+- Ordinary framed window (`"KDX Dock"`); no dedicated `.hap` Dock slots
+- Frame / title: Window Focus + Primary Label
+- Client: Primary Background
+- Item buttons: Button group (+ program-art icons per window)
+- Close restores every docked window
+- Minimize / title double-click on other windows hide into this Dock
 
 ## Authoring note
 
