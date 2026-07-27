@@ -61,8 +61,9 @@ try {
 } catch { bad_host = true; }
 check(bad_host, "hosting needs the listing token");
 
+const joinP = next_frame(host);
 const guest = await open(`${ws_base}/relay/${id}?role=guest`);
-const join = await next_frame(host);
+const join = await joinP;
 const peer = new DataView(join.buffer).getUint32(0, true);
 check(join[4] === 2 && peer > 0, "host is told a guest joined");
 
@@ -80,10 +81,19 @@ host.send(envelope(0, 1, "CHAT\nEdward\thi all"));
 check(text(await next_frame(guest)) === "CHAT\nEdward\thi all",
       "peer 0 broadcasts to every guest");
 
+host.send(envelope(0, 4, "7"));  // KIND_HEARTBEAT with users=7
+await new Promise((r) => setTimeout(r, 200));
+let list = await (await fetch(base + "/rooms")).json();
+const listed = list.rooms.find((r) => r.id === id);
+check(listed && listed.users === 7,
+      "host heartbeat on the relay updates the directory");
+
+const leftP = next_frame(host);
 guest.close();
-const left = await next_frame(host);
+const left = await leftP;
 check(new DataView(left.buffer).getUint32(0, true) === peer && left[4] === 3,
       "host is told the guest left");
 
 host.close();
 await post("/remove", { id, token });
+process.exit(process.exitCode ?? 0);

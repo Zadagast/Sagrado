@@ -464,6 +464,7 @@ void paint_tracker() {
 void blit_canvas(HDC hdc, const Canvas &cv);
 void start_session(room::Role role, const std::string &id,
                    const std::string &token, const std::string &name);
+void stop_hosted_server();
 
 // Join whatever the server list has selected.
 void join_selected() {
@@ -696,7 +697,7 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 if (was == 0 && g.action.contains(x, y)) {
                     if (g.hosting.active)
-                        host_room::stop_hosting();
+                        stop_hosted_server();
                     else
                         host_room::start_hosting();
                 } else if (was == 1 && g.close.contains(x, y)) {
@@ -759,7 +760,7 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DESTROY:
-            // Hosting outlives the window; the launcher keeps the heartbeat.
+            // Hosting outlives this dialog; the relay socket keeps the listing.
             g.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
             return 0;
@@ -1009,6 +1010,15 @@ void paint_server() {
 void close_session() {
     room::leave();
     if (host_room::g.hosting.active) host_room::stop_hosting();
+}
+
+// Leave the relay before POSTing /remove — under Wine a concurrent WinHTTP
+// request to the tracker corrupts the open WebSocket.
+void stop_hosted_server() {
+    if (g_server.hwnd)
+        DestroyWindow(g_server.hwnd);  // WM_DESTROY → close_session
+    else
+        close_session();
 }
 
 LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1356,7 +1366,7 @@ void menu_chosen(int id) {
             open_host_room(g_hinst);
             break;
         case CmdStopHosting:
-            host_room::stop_hosting();
+            stop_hosted_server();
             break;
         case CmdConnect:
             open_tracker(g_hinst);
@@ -1484,10 +1494,6 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_TIMER: {
-            if (wp == 2) {  // keeps our tracker listing from lapsing
-                tracker::heartbeat(host_room::g.hosting);
-                return 0;
-            }
             bool f = GetForegroundWindow() == hwnd;
             if (f != g_app.focused) {
                 g_app.focused = f;
@@ -1537,7 +1543,6 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     room::init();
     ShowWindow(hwnd, show);
     SetTimer(hwnd, 1, 250, nullptr);
-    SetTimer(hwnd, 2, 30000, nullptr);
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0) {

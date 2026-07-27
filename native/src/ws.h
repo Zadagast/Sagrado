@@ -3,16 +3,21 @@
 // behind any router without forwarding a port. Blocking by design — callers
 // run it on a worker thread and post results back to the window.
 //
-// KNOWN BUG (Wine only, reproducible with build/test_ws.exe): while this
+// FIXED (listing heartbeat): the host keeps its tracker listing alive by
+// sending kind-4 frames on this socket (see room.h), so hosting no longer
+// issues a concurrent WinHTTP request to the same tracker.
+//
+// STILL AFOOT (Wine only, reproducible with build/test_ws.exe): while this
 // socket is open, an ordinary WinHTTP request to the same tracker corrupts the
 // frame stream — the relay rejects the next frame ("RSV bits set" / "the
 // compression bit was set") and drops the connection. It looks like Wine's
 // global keep-alive pool handing the WebSocket's connection to the HTTP
 // request; neither WINHTTP_DISABLE_KEEP_ALIVE on both handles nor holding the
 // upgrade request handle open for the socket's lifetime (both done below)
-// fixes it. Native Windows is unaffected. Likely fixes: stop making HTTP
-// calls while hosting (move the tracker heartbeat onto the relay socket), or
-// replace WinHTTP here with a Winsock WebSocket plus Schannel for wss://.
+// fixes it. Native Windows is unaffected. Callers must not HTTP the tracker
+// while this socket is live (register before open, /remove after close). A
+// full cure would replace WinHTTP here with a Winsock WebSocket plus Schannel
+// for wss://.
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN

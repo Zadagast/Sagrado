@@ -1,6 +1,7 @@
 // The Host a Server window: names a server, registers it with the Sagrado
-// tracker and keeps the listing alive with heartbeats. Guests arrive over the
-// tracker's relay, so there is nothing to listen on and no port to forward.
+// tracker, then opens the relay. Guests arrive over that relay, so there is
+// nothing to listen on and no port to forward. The listing stays alive via
+// heartbeats on the relay socket (see room.h), not a second HTTP channel.
 // Drawn on the Sagrado Kit like every other window — chrome, fields and
 // buttons from the kit, no native controls.
 #pragma once

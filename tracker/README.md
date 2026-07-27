@@ -13,6 +13,7 @@ room traffic never passes through here.
 | `/register`  | POST   | `{name, group, description, users, addr, pubkey}`              | `{id, token, heartbeat_ms}` |
 | `/heartbeat` | POST   | `{id, token, users?, description?}`                            | `{ok:true}` |
 | `/remove`    | POST   | `{id, token}`                                                  | `{ok:true}` |
+| `/relay/<id>`| WS     | host: `?role=host&token=…` · guest: `?role=guest`              | opaque frames; host may send kind `4` heartbeats |
 
 - `addr` is the address guests dial. A host that doesn't know its public
   address sends `":4880"` and the tracker fills in the address the
@@ -20,7 +21,11 @@ room traffic never passes through here.
 - `token` is the room's private key to its listing: only its holder can
   heartbeat, update or remove it.
 - A room disappears 90s after its last heartbeat, so crashed hosts drop off
-  the list by themselves.
+  the list by themselves. While the host's relay socket is open, heartbeats
+  are kind-`4` frames on that socket (ASCII user count in the payload) so
+  the client never needs a concurrent HTTP call to the tracker — under Wine
+  that clashes with WinHTTP's WebSocket. `POST /heartbeat` remains for tools
+  and the brief window before the relay is up.
 - `pubkey` is the host's identity; guests verify it during the room handshake,
   so a listing can't be impersonated by whoever holds the address.
 
