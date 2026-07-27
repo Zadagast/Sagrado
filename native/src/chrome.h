@@ -23,14 +23,6 @@ constexpr Color kGreyBright{85, 85, 85};
 constexpr Color kGreyBody{34, 34, 34};
 constexpr Color kGreyDeep{17, 17, 17};
 
-struct ChromeColors {
-    Color bright, body, deep;
-};
-inline ChromeColors chrome_colors(bool focused) {
-    return focused ? ChromeColors{kBright, kBody, kDeep}
-                   : ChromeColors{kGreyBright, kGreyBody, kGreyDeep};
-}
-
 // Greys used by the menu/tab bars and scrollbars.
 constexpr Color kBarLight{102, 102, 102}; // #666666
 constexpr Color kBarBody{51, 51, 51};     // #333333
@@ -39,6 +31,49 @@ constexpr Color kTrack{34, 34, 34};       // #222222
 constexpr Color kThumb{51, 51, 51};
 constexpr Color kThumbHi{68, 68, 68};
 constexpr Color kGlyphGrey{136, 136, 136};
+
+inline Color from_u32(uint32_t v) {
+    return {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
+}
+
+struct ChromeColors {
+    Color bright, body, deep;
+};
+inline ChromeColors chrome_colors(bool focused) {
+    return focused ? ChromeColors{kBright, kBody, kDeep}
+                   : ChromeColors{kGreyBright, kGreyBody, kGreyDeep};
+}
+
+// The full Standard-frame palette: the measured Haxial Standard values, or
+// the theme's Window / Window Focus color groups (54-60 / 79-85) and their
+// 18-step Transition gradients (61-78 / 86-103) when the .hap has colors.
+struct FramePalette {
+    ChromeColors cc;
+    Color frame, label;
+    Color grad[18];
+};
+inline FramePalette frame_palette(const Theme *theme, bool focused) {
+    FramePalette p;
+    if (theme && theme->has_colors) {
+        auto c = [&](int i) { return from_u32(theme->color(i)); };
+        int base = focused ? ColWindowFocusLight2 : ColWindowLight2;
+        p.cc = {c(base + 1), c(base + 2), c(base + 3)};
+        p.frame = c(base + 5);
+        p.label = c(base + 6);
+        int g = focused ? ColWindowFocusTransition1 : ColWindowTransition1;
+        for (int i = 0; i < 18; ++i) p.grad[i] = c(g + i);
+        return p;
+    }
+    p.cc = chrome_colors(focused);
+    p.frame = kBlack;
+    p.label = focused ? kWhite : kGlyphGrey;
+    for (int i = 0; i < 18; ++i) {
+        uint8_t v = focused ? kTitleGrad[i] : kTitleGradGrey[i];
+        p.grad[i] = focused ? Color{v, 0, 0} : Color{v, v, v};
+    }
+    return p;
+}
+
 
 // Standard metrics, measured from the real window.
 constexpr int kTitleH = 22;
@@ -154,9 +189,10 @@ inline void diagonal_hatch(Canvas &cv, Rect r, Color c) {
 // black outline over the title gradient, no fill, no bevel. Pressed fills
 // with the deep shade.
 inline void flat_box(Canvas &cv, Rect r, bool pressed,
-                     ChromeColors cc = chrome_colors(true)) {
+                     ChromeColors cc = chrome_colors(true),
+                     Color frame = kBlack) {
     if (pressed) cv.fill(r, cc.deep);
-    cv.frame(r, kBlack);
+    cv.frame(r, frame);
 }
 
 // The 10x10 close glyph measured from the real window (box-relative 2,2).
@@ -215,16 +251,16 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     }
     Rect slab = {1, 1, win.w - 2, win.h - 2};
 
-    // Unfocused, the whole chrome goes greyscale like the real thing.
-    ChromeColors cc = chrome_colors(focused);
+    // Standard: measured Haxial values; themed: the Window color groups.
+    // Unfocused, the whole chrome switches to the unfocused group (Standard:
+    // greyscale, like the real thing).
+    FramePalette pal = frame_palette(theme, focused);
+    ChromeColors cc = pal.cc;
 
     // Slab body, then the title gradient flowing into the side borders.
     cv.fill(slab, cc.body);
-    for (int i = 0; i < 18; ++i) {
-        uint8_t v = focused ? kTitleGrad[i] : kTitleGradGrey[i];
-        cv.hline(slab.x, slab.right(), 2 + i,
-                 focused ? Color{v, 0, 0} : Color{v, v, v});
-    }
+    for (int i = 0; i < 18; ++i)
+        cv.hline(slab.x, slab.right(), 2 + i, pal.grad[i]);
     cv.hline(slab.x, slab.right(), kTitleH - 2, cc.deep);
 
     // Bright faces (light from the top-left).
@@ -239,27 +275,29 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
     cv.vline(slab.right() - 1, client.y - 2, slab.bottom(), cc.deep);
     cv.hline(slab.x + 1, slab.right(), slab.bottom() - 1, cc.deep);
 
-    // The only interior black: the client-hole outline. Plus the outer edge.
-    cv.frame({client.x - 1, client.y - 1, client.w + 2, client.h + 2}, kBlack);
-    cv.frame(win, kBlack);
+    // The only interior frame line: the client-hole outline. Plus the outer
+    // edge (Standard: black; themed: the Window Frame entry).
+    cv.frame({client.x - 1, client.y - 1, client.w + 2, client.h + 2},
+             pal.frame);
+    cv.frame(win, pal.frame);
 
-    // Title, centred, in the KDX pixel font (stays white, like the real).
+    // Title, centred, in the KDX pixel font (Window Label entry).
     int tw = cv.text_width(title);
-    cv.text((win.w - tw) / 2, (kTitleH - kFontHeight) / 2, title, kWhite);
+    cv.text((win.w - tw) / 2, (kTitleH - kFontHeight) / 2, title, pal.label);
 
     // Title-bar boxes, measured from the real window: 1px black outlines
     // over the gradient (no fill, no bevel) with thick white glyphs.
-    flat_box(cv, lay.close_box, pressed_box == 1, cc);
-    close_glyph(cv, lay.close_box, kWhite);
-    flat_box(cv, lay.hatch_box, false, cc);
+    flat_box(cv, lay.close_box, pressed_box == 1, cc, pal.frame);
+    close_glyph(cv, lay.close_box, pal.label);
+    flat_box(cv, lay.hatch_box, false, cc, pal.frame);
     diagonal_hatch(cv, {lay.hatch_box.x + 2, lay.hatch_box.y + 2,
                         lay.hatch_box.w - 4, lay.hatch_box.h - 4},
-                   kWhite);
-    flat_box(cv, lay.max_box, pressed_box == 3, cc);
-    cv.fill({lay.max_box.x + 1, lay.max_box.y + 6, 10, 2}, kWhite);
-    cv.fill({lay.max_box.x + 5, lay.max_box.y + 2, 2, 10}, kWhite);
-    flat_box(cv, lay.min_box, pressed_box == 4, cc);
-    cv.fill({lay.min_box.x + 1, lay.min_box.y + 6, 10, 2}, kWhite);
+                   pal.label);
+    flat_box(cv, lay.max_box, pressed_box == 3, cc, pal.frame);
+    cv.fill({lay.max_box.x + 1, lay.max_box.y + 6, 10, 2}, pal.label);
+    cv.fill({lay.max_box.x + 5, lay.max_box.y + 2, 2, 10}, pal.label);
+    flat_box(cv, lay.min_box, pressed_box == 4, cc, pal.frame);
+    cv.fill({lay.min_box.x + 1, lay.min_box.y + 6, 10, 2}, pal.label);
 
     (void)hot_box;
 }
@@ -274,10 +312,11 @@ inline void paint_grip(Canvas &cv, Rect g, bool focused,
         cv.nine_slice(*img, g);
         return;
     }
-    ChromeColors cc = chrome_colors(focused);
+    FramePalette pal = frame_palette(theme, focused);
+    ChromeColors cc = pal.cc;
     cv.fill(g, cc.body);
-    cv.hline(g.x, g.right(), g.y, kBlack);
-    cv.vline(g.x, g.y, g.bottom(), kBlack);
+    cv.hline(g.x, g.right(), g.y, pal.frame);
+    cv.vline(g.x, g.y, g.bottom(), pal.frame);
     cv.hline(g.x + 1, g.right(), g.y + 1, cc.bright);
     cv.vline(g.x + 1, g.y + 1, g.bottom(), cc.bright);
     cv.hline(g.x + 1, g.right(), g.bottom() - 1, cc.deep);
@@ -290,10 +329,6 @@ inline void paint_grip(Canvas &cv, Rect g, bool focused,
             cv.put(g.right() - 2 - o + s, g.bottom() - 3 - s, pack(cc.bright));
         }
     }
-}
-
-inline Color from_u32(uint32_t v) {
-    return {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
 }
 
 // Semantic UI colors resolved from the theme's 204-entry color table
