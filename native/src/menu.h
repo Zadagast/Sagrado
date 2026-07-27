@@ -100,7 +100,8 @@ inline void paint(HDC hdc) {
     const Theme *theme = kit_theme();
     UiColors uc = ui_colors(theme);
 
-    // Outer ring: themed Window Focus colours (Standard: the red frame).
+    // Outer ring: Window Focus colours, or Focus Box when that group is still
+    // Standard red (art themes like Gamespot). Panel uses Menu 104–112.
     FramePalette pal = frame_palette(theme, true);
     cv.fill({0, 0, w, h}, pal.cc.body);
     cv.frame({0, 0, w, h}, pal.frame);
@@ -120,7 +121,7 @@ inline void paint(HDC hdc) {
     for (size_t i = 0; i < g_menu.items.size(); ++i) {
         const Item &it = g_menu.items[i];
         int top = item_top(int(i));
-        if (it.id == 0) { // separator: an engraved line across the panel
+        if (it.id == 0) { // separator: engraved with Menu Light/Dark
             cv.hline(r.x + 1, r.right() - 1, top + 7, uc.bar_dark);
             cv.hline(r.x + 1, r.right() - 1, top + 8, uc.bar_light);
             continue;
@@ -132,15 +133,17 @@ inline void paint(HDC hdc) {
             cv.hline(row.x, row.right(), row.y, uc.hilite_light);
             cv.hline(row.x, row.right(), row.bottom() - 1, uc.hilite_dark);
         }
+        // Labels / shortcuts / submenu chevrons all use Menu Label colours.
         Color fg =
             !it.enabled ? uc.disable_text : hot ? uc.hilite_text : uc.text;
         if (it.icon.px) {
-            uint32_t bg = pack(uc.bar_body);
+            uint32_t bg = pack(hot ? uc.hilite : uc.bar_body);
             int iy = top + (kItemH - it.icon.h) / 2;
             for (int y = 0; y < it.icon.h; ++y)
                 for (int x = 0; x < it.icon.w; ++x) {
                     uint32_t p = it.icon.px[size_t(y) * it.icon.w + x];
-                    if (p != bg) cv.put(r.x + kIconX + x, iy + y, p);
+                    if (p != bg && (p & 0xffffff) != 0x333333)
+                        cv.put(r.x + kIconX + x, iy + y, p);
                 }
         }
         cv.text(r.x + kLabelX, row.y + 1, it.label.c_str(), fg);

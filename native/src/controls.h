@@ -31,6 +31,19 @@ inline DialogColors dialog_colors(const Theme *theme) {
                 kBlack};
     }
     auto c = [&](int i) { return from_u32(theme->color(i)); };
+    // Default Button (50–53): art themes often leave Standard red here while
+    // editing Focus Box (same accent as field focus). Prefer Focus Box then.
+    Color def_light = c(ColDefaultButtonLight);
+    Color def_button = c(ColDefaultButtonLight + 1);
+    Color def_frame = c(ColDefaultButtonLight + 3);
+    if (hap_stock_red_pair(theme, ColDefaultButtonLight,
+                           ColDefaultButtonLight + 1)) {
+        Color hi, mid, lo;
+        hap_focus_ramp(theme->color(ColFocusBox), hi, mid, lo);
+        def_light = hi;
+        def_button = mid;
+        (void)lo;
+    }
     return {c(ColPrimaryBackground),
             c(ColPrimaryLabel),
             c(ColTextBoxBackground),
@@ -45,9 +58,9 @@ inline DialogColors dialog_colors(const Theme *theme) {
             c(ColButtonLight2 + 4),
             c(ColButtonFrame),
             c(ColButtonLabel),
-            c(ColDefaultButtonLight),
-            c(ColDefaultButtonLight + 1),
-            c(ColDefaultButtonLight + 3)};
+            def_light,
+            def_button,
+            def_frame};
 }
 
 // Button Hilite (36–42): pressed/open command rows, hot menu triggers.
@@ -117,7 +130,8 @@ inline void rounded_frame(Canvas &cv, Rect r, Color frame, Color bg) {
 // A push button as the real window draws it: rounded black frame, 2px
 // Light2/Light1 bevel top-left, 2px Dark1/Dark2 shadow bottom-right, dark
 // face, centred label. Depresses when pressed. The default button gets the
-// Default Button ring (black / Light / Button) around it.
+// Default Button ring (or Focus Box when that group is still Standard red).
+// Prefer Push Button Normal/Hilited .hap art when the theme supplies it.
 inline void draw_button(Canvas &cv, Rect r, const char *label, bool pressed,
                         bool is_default, const DialogColors &dc) {
     if (is_default) {
@@ -126,20 +140,30 @@ inline void draw_button(Canvas &cv, Rect r, const char *label, bool pressed,
         cv.frame({r.x + 2, r.y + 2, r.w - 4, r.h - 4}, dc.def_button);
         r = {r.x + 3, r.y + 3, r.w - 6, r.h - 6};
     }
-    cv.fill(r, dc.btn);
-    rounded_frame(cv, r, dc.btn_frame, dc.workspace);
-    Color l2 = pressed ? dc.btn_d2 : dc.btn_l2;
-    Color l1 = pressed ? dc.btn_d1 : dc.btn_l1;
-    Color d1 = pressed ? dc.btn_l1 : dc.btn_d1;
-    Color d2 = pressed ? dc.btn_l2 : dc.btn_d2;
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, l2);
-    cv.hline(r.x + 2, r.right() - 2, r.y + 2, l1);
-    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, l2);
-    cv.vline(r.x + 2, r.y + 2, r.bottom() - 2, l1);
-    cv.hline(r.x + 2, r.right() - 2, r.bottom() - 3, d1);
-    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, d2);
-    cv.vline(r.right() - 3, r.y + 2, r.bottom() - 2, d1);
-    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, d2);
+    const Theme *theme = kit_theme();
+    const ThemeImage *art = nullptr;
+    if (theme) {
+        if (pressed) art = theme->image(SlotPushButtonHilited);
+        if (!art) art = theme->image(SlotPushButtonNormal);
+    }
+    if (art) {
+        cv.nine_slice(*art, r);
+    } else {
+        cv.fill(r, dc.btn);
+        rounded_frame(cv, r, dc.btn_frame, dc.workspace);
+        Color l2 = pressed ? dc.btn_d2 : dc.btn_l2;
+        Color l1 = pressed ? dc.btn_d1 : dc.btn_l1;
+        Color d1 = pressed ? dc.btn_l1 : dc.btn_d1;
+        Color d2 = pressed ? dc.btn_l2 : dc.btn_d2;
+        cv.hline(r.x + 1, r.right() - 1, r.y + 1, l2);
+        cv.hline(r.x + 2, r.right() - 2, r.y + 2, l1);
+        cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, l2);
+        cv.vline(r.x + 2, r.y + 2, r.bottom() - 2, l1);
+        cv.hline(r.x + 2, r.right() - 2, r.bottom() - 3, d1);
+        cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, d2);
+        cv.vline(r.right() - 3, r.y + 2, r.bottom() - 2, d1);
+        cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, d2);
+    }
     int tw = cv.text_width(label);
     int off = pressed ? 1 : 0;
     cv.text(r.x + (r.w - tw) / 2 + off, r.y + (r.h - kFontHeight) / 2 + off,

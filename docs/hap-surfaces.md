@@ -14,9 +14,9 @@ Full index names live in [`hap-color-table.md`](hap-color-table.md) and
 |---|---|---|
 | `frame_palette` / `paint_chrome` | Window 54–78, Window Focus 79–103 | Ooze Gel frame, title gradient, traffic-light glyphs |
 | Title labels | **Primary Label (5)** / Disable (7) | Window titles (art themes leave Window Label white) |
-| `dialog_colors` | Primary 1–9, TextBox 10–14, Button 29–35, Default Button 50–53 | Dialog fills, fields, push buttons, checkboxes |
+| `dialog_colors` / `draw_button` | Primary, TextBox, Focus, Button 29–35, Default Button 50–53 (+ **Focus Box** when Default is still Standard red); Push Button slots 25–26 when present | Dialog fills, fields, push buttons |
 | `button_hilite_colors` | Button Hilite 36–42 | Open/pressed command rows |
-| `ui_colors` | Menu 104–112 (+ scroll/tab shorthand) | Popup menus, menu bars |
+| `ui_colors` + `frame_palette` | Menu 104–112; Window Focus ring (or **Focus Box** when Window Focus is still Standard red) | Popup menus / submenus |
 | `list_colors` | List 15–20, Focus Box 9, Primary Frame 4 | Tracker/user lists, picker hilite |
 | `header_colors` | Column Header 174–182 (+ Primary Label) | Column headers, active chat tabs |
 | `scroll_colors` | ScrollBar 128–147 | Scroll tracks, arrows, thumbs |

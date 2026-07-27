@@ -39,6 +39,27 @@ inline Color from_u32(uint32_t v) {
     return {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
 }
 
+// True when a .hap left the Standard red pair (#CC0000 / #880000) untouched —
+// common on art themes that only edit Focus Box / Primary / Button.
+inline bool hap_stock_red_pair(const Theme *theme, int light, int body) {
+    return theme && theme->has_colors && theme->color(light) == 0x00cc0000 &&
+           theme->color(body) == 0x00880000;
+}
+
+inline Color hap_scale(uint32_t rgb, int num, int den) {
+    auto ch = [&](int shift) -> uint8_t {
+        return uint8_t(((rgb >> shift) & 0xff) * num / den);
+    };
+    return {ch(16), ch(8), ch(0)};
+}
+
+// 3-step accent ramp from Focus Box (default rings, stock Window Focus).
+inline void hap_focus_ramp(uint32_t focus, Color &hi, Color &mid, Color &lo) {
+    hi = from_u32(focus);
+    mid = hap_scale(focus, 2, 3);
+    lo = hap_scale(focus, 2, 5);
+}
+
 struct ChromeColors {
     Color bright, body, deep;
 };
@@ -60,6 +81,28 @@ inline FramePalette frame_palette(const Theme *theme, bool focused) {
     if (theme && theme->has_colors) {
         auto c = [&](int i) { return from_u32(theme->color(i)); };
         int base = focused ? ColWindowFocusLight2 : ColWindowLight2;
+        // Art themes often leave Window Focus at Standard red while editing
+        // Focus Box (purple on Gamespot, etc.). Menus and color-only frames
+        // should follow that accent instead of the leftover red ramp.
+        bool stock_focus =
+            focused && hap_stock_red_pair(theme, ColWindowFocusLight2,
+                                          ColWindowFocusLight2 + 2);
+        if (stock_focus) {
+            Color hi, mid, lo;
+            hap_focus_ramp(theme->color(ColFocusBox), hi, mid, lo);
+            p.cc = {hi, mid, lo};
+            p.frame = c(base + 5);
+            p.label = c(ColPrimaryLabel);
+            for (int i = 0; i < 18; ++i) {
+                // Blend lo → hi across the title gradient.
+                int num = i, den = 17;
+                auto mix = [&](uint8_t a, uint8_t b) -> uint8_t {
+                    return uint8_t(a + (int(b) - int(a)) * num / den);
+                };
+                p.grad[i] = {mix(lo.r, hi.r), mix(lo.g, hi.g), mix(lo.b, hi.b)};
+            }
+            return p;
+        }
         p.cc = {c(base + 1), c(base + 2), c(base + 3)};
         p.frame = c(base + 5);
         p.label = c(base + 6);
