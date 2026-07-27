@@ -1008,8 +1008,10 @@ void paint_server() {
 }
 
 void close_session() {
+    // Leave the relay first (UI-safe), then drop the listing without blocking
+    // WM_DESTROY on a tracker HTTP call.
     room::leave();
-    if (host_room::g.hosting.active) host_room::stop_hosting();
+    host_room::stop_hosting_async();
 }
 
 // Leave the relay before POSTing /remove — under Wine a concurrent WinHTTP
