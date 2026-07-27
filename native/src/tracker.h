@@ -24,7 +24,7 @@ inline const char *const kGroupNames[] = {"Business", "Chat",      "Education",
 constexpr int kGroupCount = 8;
 
 struct Room {
-    std::string name, group, description, addr, pubkey, date;
+    std::string id, name, group, description, addr, pubkey, date;
     int users = 0;
 };
 
@@ -97,6 +97,7 @@ inline bool parse(const std::string &body, Directory &dir) {
                               int(json::number_member(g, "count"))});
     for (const char *r : json::elements(rooms)) {
         Room room;
+        room.id = json::string_member(r, "id");
         room.name = json::string_member(r, "name");
         room.group = json::string_member(r, "group");
         room.description = json::string_member(r, "description");
@@ -109,11 +110,12 @@ inline bool parse(const std::string &body, Directory &dir) {
     return true;
 }
 
-// A room this client is hosting, kept alive by heartbeats.
+// A server this client is hosting, kept alive by heartbeats. Guests reach it
+// through the tracker's relay using the listing id, so no address is
+// published and nothing has to be port-forwarded.
 struct Hosting {
     bool active = false;
     std::string id, token, name, group, description;
-    int port = 4880;
     int users = 1;
 };
 
@@ -121,9 +123,8 @@ inline bool register_room(Hosting &h, std::string &error) {
     char body[1024];
     wsprintfA(body,
               "{\"name\":\"%s\",\"group\":\"%s\",\"description\":\"%s\","
-              "\"users\":%d,\"addr\":\"%s\"}",
-              h.name.c_str(), h.group.c_str(), h.description.c_str(), h.users,
-              (":" + std::to_string(h.port)).c_str());
+              "\"users\":%d}",
+              h.name.c_str(), h.group.c_str(), h.description.c_str(), h.users);
     std::string reply;
     if (!net::request(base_url() + "/register", body, reply)) {
         error = "could not reach the tracker";

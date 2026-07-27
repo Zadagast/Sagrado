@@ -1,7 +1,8 @@
-// The Host a Room window: names a room, registers it with the Sagrado
-// tracker and keeps the listing alive with heartbeats. Drawn on the Sagrado
-// Kit like every other window — chrome, fields and buttons from the kit, no
-// native controls.
+// The Host a Server window: names a server, registers it with the Sagrado
+// tracker and keeps the listing alive with heartbeats. Guests arrive over the
+// tracker's relay, so there is nothing to listen on and no port to forward.
+// Drawn on the Sagrado Kit like every other window — chrome, fields and
+// buttons from the kit, no native controls.
 #pragma once
 
 #include <string>
@@ -15,7 +16,7 @@ namespace host_room {
 
 using tracker::kGroupNames;
 
-constexpr int kW = 400, kH = 232;
+constexpr int kW = 400, kH = 204;
 constexpr UINT WM_HOST_DONE = WM_APP + 2;  // the register call returned
 
 struct Window {
@@ -23,14 +24,14 @@ struct Window {
     Canvas canvas;
     ChromeLayout lay{};
     int pressed_box = 0;
-    int focus = 0;      // 0 name, 1 description, 2 port
+    int focus = 0;      // 0 name, 1 description
     bool caret = true;
     int pressed_btn = -1;  // 0 host/stop, 1 close
     int group = 4;         // General
-    std::string name, description, port = "4880";
+    std::string name, description;
     std::string status;
     bool busy = false;
-    Rect field[3]{}, group_box{}, action{}, close{};
+    Rect field[2]{}, group_box{}, action{}, close{};
     tracker::Hosting hosting;
     std::string error;
 };
@@ -38,11 +39,7 @@ struct Window {
 inline Window g;
 
 inline std::string *focused_text() {
-    switch (g.focus) {
-        case 0: return &g.name;
-        case 1: return &g.description;
-        default: return &g.port;
-    }
+    return g.focus == 0 ? &g.name : &g.description;
 }
 
 inline void layout(int w, int h) {
@@ -52,8 +49,8 @@ inline void layout(int w, int h) {
     int lx = g.lay.client.x + 14, fx = lx + 96;
     int fw = g.lay.client.right() - 14 - fx;
     int y = g.lay.client.y + 16;
-    for (int i = 0; i < 3; ++i) {
-        g.field[i] = {fx, y, i == 2 ? 70 : fw, 20};
+    for (int i = 0; i < 2; ++i) {
+        g.field[i] = {fx, y, fw, 20};
         y += 28;
     }
     g.group_box = {fx, y, 150, 20};
@@ -71,17 +68,15 @@ inline void paint() {
         cv.resize(rc.right, rc.bottom);
     bool focused = GetForegroundWindow() == g.hwnd;
     layout(rc.right, rc.bottom);
-    paint_chrome(cv, g.lay, "Host a Room", focused, 0,
+    paint_chrome(cv, g.lay, "Host a Server", focused, 0,
                  g.pressed_box == 5 ? 1 : 0, nullptr);
 
     DialogColors dc = dialog_colors(nullptr);
     cv.fill(g.lay.client, dc.workspace);
 
-    const char *labels[] = {"Room Name:", "Description:", "Port:"};
-    for (int i = 0; i < 3; ++i) {
-        const std::string &text = i == 0   ? g.name
-                                  : i == 1 ? g.description
-                                           : g.port;
+    const char *labels[] = {"Server Name:", "Description:"};
+    for (int i = 0; i < 2; ++i) {
+        const std::string &text = i == 0 ? g.name : g.description;
         cv.text(g.lay.client.x + 14,
                 g.field[i].y + (g.field[i].h - kFontHeight) / 2, labels[i],
                 dc.label);
@@ -102,7 +97,7 @@ inline void paint() {
 
     draw_button(cv, g.action,
                 g.busy ? "Working..."
-                       : (g.hosting.active ? "Stop" : "Host Room"),
+                       : (g.hosting.active ? "Stop" : "Host Server"),
                 g.pressed_btn == 0, !g.hosting.active, dc);
     draw_button(cv, g.close, "Close", g.pressed_btn == 1, false, dc);
 }
@@ -119,14 +114,12 @@ inline DWORD WINAPI register_thread(LPVOID) {
 inline void start_hosting() {
     if (g.busy || g.hosting.active) return;
     if (g.name.empty()) {
-        g.status = "Give the room a name first.";
+        g.status = "Give the server a name first.";
         return;
     }
     g.hosting.name = g.name;
     g.hosting.description = g.description;
     g.hosting.group = kGroupNames[g.group];
-    g.hosting.port = atoi(g.port.c_str());
-    if (g.hosting.port <= 0 || g.hosting.port > 65535) g.hosting.port = 4880;
     g.hosting.users = 1;
     g.busy = true;
     g.status = "Registering with the tracker...";
@@ -137,7 +130,7 @@ inline void start_hosting() {
 
 inline void stop_hosting() {
     tracker::unregister(g.hosting);
-    g.status = "Room removed from the tracker.";
+    g.status = "Server removed from the tracker.";
 }
 
 }  // namespace host_room

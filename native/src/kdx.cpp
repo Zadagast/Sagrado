@@ -17,6 +17,7 @@
 #include "kdx_art.h"
 #include "host_room.h"
 #include "menu.h"
+#include "room.h"
 #include "tracker.h"
 
 namespace {
@@ -461,6 +462,17 @@ void paint_tracker() {
 }
 
 void blit_canvas(HDC hdc, const Canvas &cv);
+void start_session(room::Role role, const std::string &id,
+                   const std::string &token, const std::string &name);
+
+// Join whatever the server list has selected.
+void join_selected() {
+    int sel = g_tracker.sel_server;
+    if (sel < 0 || sel >= int(g_tracker.dir.rooms.size())) return;
+    const tracker::Room &r = g_tracker.dir.rooms[sel];
+    if (r.id.empty()) return;
+    start_session(room::Guest, r.id, "", r.name);
+}
 
 LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -574,9 +586,15 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
+        case WM_LBUTTONDBLCLK:
+            if (g_tracker.servers.body.contains(GET_X_LPARAM(lp),
+                                                GET_Y_LPARAM(lp)))
+                join_selected();
+            return 0;
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) DestroyWindow(hwnd);
             if (wp == VK_F5) refresh_tracker();
+            if (wp == VK_RETURN) join_selected();
             return 0;
         case WM_ACTIVATE:
         case WM_SETFOCUS:
@@ -610,6 +628,7 @@ void open_tracker(HINSTANCE hinst) {
     if (!registered) {
         InitializeCriticalSection(&g_tracker.mutex);
         WNDCLASSA wc{};
+        wc.style = CS_DBLCLKS;
         wc.lpfnWndProc = tracker_proc;
         wc.hInstance = hinst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -628,7 +647,10 @@ void open_tracker(HINSTANCE hinst) {
     SetTimer(g_tracker.hwnd, 1, 30000, nullptr);  // keep the list fresh
 }
 
-// ---- Host a Room ----
+// ---- Host a Server ----
+
+void start_session(room::Role role, const std::string &id,
+                   const std::string &token, const std::string &name);
 
 LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     host_room::Window &g = host_room::g;
@@ -644,7 +666,7 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 DestroyWindow(hwnd);
                 return 0;
             }
-            for (int i = 0; i < 3; ++i)
+            for (int i = 0; i < 2; ++i)
                 if (g.field[i].contains(x, y)) {
                     g.focus = i;
                     InvalidateRect(hwnd, nullptr, FALSE);
@@ -690,11 +712,11 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (c == '\b') {
                 if (!t.empty()) t.pop_back();
             } else if (c == '\t') {
-                g.focus = (g.focus + 1) % 3;
+                g.focus = (g.focus + 1) % 2;
             } else if (c == '\r') {
                 host_room::start_hosting();
             } else if (c >= 32 && c < 127 && t.size() < 120) {
-                if (g.focus != 2 || (c >= '0' && c <= '9')) t += c;
+                t += c;
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -705,11 +727,11 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case host_room::WM_HOST_DONE:
             g.busy = false;
             if (wp) {
-                char buf[160];
-                wsprintfA(buf, "Listed on the tracker on port %d.",
-                          g.hosting.port);
-                g.status = buf;
-                SetTimer(hwnd, 2, 30000, nullptr);  // heartbeat
+                g.status = "Listed on the tracker.";
+                start_session(room::Host, g.hosting.id, g.hosting.token,
+                              g.hosting.name);
+                DestroyWindow(hwnd);
+                return 0;
             } else {
                 g.status = g.error.empty() ? "Registration failed."
                                            : g.error;
@@ -718,12 +740,8 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case WM_TIMER:
-            if (wp == 2) {
-                tracker::heartbeat(g.hosting);
-            } else {
-                g.caret = !g.caret;
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
+            g.caret = !g.caret;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case WM_ACTIVATE:
         case WM_SETFOCUS:
@@ -767,12 +785,422 @@ void open_host_room(HINSTANCE hinst) {
     }
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    g.hwnd = CreateWindowExA(0, "SagradoHostRoom", "Host a Room", WS_POPUP,
+    g.hwnd = CreateWindowExA(0, "SagradoHostRoom", "Host a Server", WS_POPUP,
                              mr.right + 12, mr.top + 40, host_room::kW,
                              host_room::kH, g_main, nullptr, hinst, nullptr);
     ShowWindow(g.hwnd, SW_SHOW);
     SetForegroundWindow(g.hwnd);
     SetTimer(g.hwnd, 1, 500, nullptr);  // caret blink
+}
+
+// ---- Chat window ----
+// The real KDX chat window: a Chat List button and the room's own tab along
+// the top, a black chat pane where each line is drawn in the speaker's own
+// colour, the user list on the right, the red-outlined entry box and the
+// Topic button underneath. Host and guest use the same window; see room.h
+// for the connection behind it.
+
+constexpr int kSrvW = 800, kSrvH = 520;
+constexpr int kUserW = 190;
+constexpr int kLineH = kFontHeight + 2;
+constexpr int kUserRowH = 24;
+constexpr int kToolH = 22;   // Chat List / room tab row
+constexpr int kEntryH = 40;  // the message box
+constexpr int kTopicH = 20;
+
+const Color kChatBg{0, 0, 0};
+const Color kTabActive{136, 0, 0};
+
+struct ServerWin {
+    HWND hwnd = nullptr;
+    Canvas canvas;
+    ChromeLayout lay{};
+    ScrollBar chat_sb, user_sb;
+    Rect chat{}, users{}, entry{}, chat_list_btn{}, room_tab{}, topic_btn{};
+    std::string draft;
+    bool caret = true;
+    int pressed_box = 0;
+    int pressed_btn = -1;  // 0 Chat List, 1 room tab, 2 Topic
+    ScrollBar *drag = nullptr;
+    int drag_grab = 0;
+    bool follow = true;  // stay pinned to the newest line
+} g_server;
+
+struct ChatLine {
+    std::string text;
+    Color fg;
+};
+
+// A sunken pane: black edge, dark face, the bevel the kit uses everywhere.
+void sunken(Canvas &cv, Rect r, Color face) {
+    cv.fill(r, face);
+    cv.frame(r, kBlack);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kPlateLo);
+    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, kPlateLo);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, kPlateHi);
+    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, kPlateHi);
+}
+
+// Program art carries the launcher's #333 panel behind it; treat that as
+// transparent so an icon can sit on any background.
+void blit_icon(Canvas &cv, const ArtImage &a, int x, int y) {
+    for (int iy = 0; iy < a.h; ++iy)
+        for (int ix = 0; ix < a.w; ++ix) {
+            uint32_t p = a.px[size_t(iy) * a.w + ix];
+            if ((p & 0xffffff) != 0x333333) cv.put(x + ix, y + iy, p);
+        }
+}
+
+// Break the log into display lines at the pane's width, on spaces when it
+// can and mid-word when a word is longer than the pane. Each display line
+// keeps the colour of the line it came from.
+std::vector<ChatLine> wrap_log(Canvas &cv, const std::vector<room::Line> &log,
+                               int width) {
+    std::vector<ChatLine> out;
+    for (const room::Line &line : log) {
+        Color fg = from_u32(line.fg);
+        std::string cur;
+        size_t last_space = std::string::npos;
+        for (char c : line.text) {
+            cur += c;
+            if (c == ' ') last_space = cur.size() - 1;
+            if (cv.text_width(cur.c_str()) <= width) continue;
+            if (last_space != std::string::npos && last_space > 0) {
+                out.push_back({cur.substr(0, last_space), fg});
+                cur = cur.substr(last_space + 1);
+            } else {
+                out.push_back({cur.substr(0, cur.size() - 1), fg});
+                cur = cur.substr(cur.size() - 1);
+            }
+            last_space = std::string::npos;
+        }
+        out.push_back({cur, fg});
+    }
+    return out;
+}
+
+// The room's own tab: the same button shape held red, as KDX marks the chat
+// you are looking at.
+void draw_tab(Canvas &cv, Rect r, const char *label, bool pressed,
+              const DialogColors &dc) {
+    cv.fill(r, kTabActive);
+    rounded_frame(cv, r, dc.btn_frame, dc.workspace);
+    Color hi = pressed ? Color{68, 0, 0} : Color{204, 0, 0};
+    Color lo = pressed ? Color{204, 0, 0} : Color{68, 0, 0};
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, hi);
+    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, hi);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, lo);
+    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, lo);
+    int off = pressed ? 1 : 0;
+    blit_icon(cv, kIcChat, r.x + 6 + off, r.y + (r.h - kIcChat.h) / 2 + off);
+    cv.text(r.x + 26 + off, r.y + (r.h - kFontHeight) / 2 + off, label,
+            kWhite);
+}
+
+void paint_server() {
+    ServerWin &s = g_server;
+    Canvas &cv = s.canvas;
+    RECT rc;
+    GetClientRect(s.hwnd, &rc);
+    if (rc.right <= 0 || rc.bottom <= 0) return;
+    if (cv.width() != rc.right || cv.height() != rc.bottom)
+        cv.resize(rc.right, rc.bottom);
+    bool focused = GetForegroundWindow() == s.hwnd;
+    s.lay = chrome_layout(rc.right, rc.bottom, nullptr, focused);
+    s.lay.max_box = {0, 0, 0, 0};
+
+    std::string name = room::name_copy();
+    if (name.empty()) name = "Sagrado Server";
+    std::string title = "Chat: " + name;
+    paint_chrome(cv, s.lay, title.c_str(), focused, 0,
+                 s.pressed_box == 5 ? 1 : 0, nullptr);
+
+    DialogColors dc = dialog_colors(nullptr);
+    Rect cl = s.lay.client;
+    cv.fill(cl, dc.workspace);
+
+    s.chat_list_btn = {cl.x + 6, cl.y + 6, 92, kToolH};
+    int tab_w = cv.text_width(name.c_str()) + 36;
+    s.room_tab = {s.chat_list_btn.right() + 8, cl.y + 6, tab_w, kToolH};
+    s.topic_btn = {cl.x + 6, cl.bottom() - 6 - kTopicH, 62, kTopicH};
+    int top = s.chat_list_btn.bottom() + 6;
+    int right_col = cl.right() - 6 - kUserW;
+    s.entry = {cl.x + 6, s.topic_btn.y - 6 - kEntryH,
+               right_col - 8 - (cl.x + 6), kEntryH};
+    s.chat = {cl.x + 6, top, s.entry.w, s.entry.y - 6 - top};
+    s.users = {right_col, top, kUserW, s.entry.bottom() - top};
+
+    draw_button(cv, s.chat_list_btn, "Chat List", s.pressed_btn == 0, false,
+                dc);
+    draw_tab(cv, s.room_tab, name.c_str(), s.pressed_btn == 1, dc);
+
+    std::vector<room::Line> log = room::log_copy();
+    std::vector<ChatLine> lines = wrap_log(cv, log, s.chat.w - kSbW - 10);
+    int rows = (s.chat.h - 4) / kLineH;
+    s.chat_sb.vertical = true;
+    s.chat_sb.r = {s.chat.right() - kSbW, s.chat.y, kSbW, s.chat.h};
+    s.chat_sb.page = rows > 0 ? rows : 1;
+    s.chat_sb.total = int(lines.size());
+    if (s.follow) s.chat_sb.value = s.chat_sb.max_value();
+    s.chat_sb.layout();
+
+    sunken(cv, s.chat, kChatBg);
+    cv.set_clip({s.chat.x + 2, s.chat.y + 2, s.chat.w - kSbW - 2,
+                 s.chat.h - 4});
+    for (int i = 0; i < rows; ++i) {
+        int idx = s.chat_sb.value + i;
+        if (idx < 0 || idx >= int(lines.size())) break;
+        cv.text(s.chat.x + 5, s.chat.y + 3 + i * kLineH,
+                lines[idx].text.c_str(), lines[idx].fg);
+    }
+    cv.clear_clip();
+    s.chat_sb.paint(cv);
+
+    // Each user gets a row of their own colours, with their icon beside the
+    // name (one icon for everyone until Settings can set it).
+    std::vector<room::User> users = room::user_copy();
+    int seats = (s.users.h - 4) / kUserRowH;
+    s.user_sb.vertical = true;
+    s.user_sb.r = {s.users.right() - kSbW, s.users.y, kSbW, s.users.h};
+    s.user_sb.page = seats > 0 ? seats : 1;
+    s.user_sb.total = int(users.size());
+    s.user_sb.layout();
+
+    sunken(cv, s.users, kChatBg);
+    Rect body{s.users.x + 2, s.users.y + 2, s.users.w - kSbW - 2,
+              s.users.h - 4};
+    cv.set_clip(body);
+    for (int i = 0; i < seats; ++i) {
+        int idx = s.user_sb.value + i;
+        if (idx < 0 || idx >= int(users.size())) break;
+        const room::User &u = users[idx];
+        Rect row{body.x, body.y + i * kUserRowH, body.w, kUserRowH};
+        cv.fill(row, from_u32(u.bg));
+        cv.hline(row.x, row.right(), row.bottom() - 1, kBarBody);
+        blit_icon(cv, kIcUsers, row.x + 4, row.y + (kUserRowH - kIcUsers.h) / 2);
+        cv.text(row.x + 26, row.y + (kUserRowH - kFontHeight) / 2,
+                u.nick.c_str(), from_u32(u.fg));
+    }
+    cv.clear_clip();
+    s.user_sb.paint(cv);
+
+    // The entry box: black, with the red focus outline the real one has.
+    cv.fill(s.entry, kChatBg);
+    cv.frame(s.entry, focused ? dc.field_focus : dc.field_frame);
+    int end = cv.text(s.entry.x + 5, s.entry.y + 4, s.draft.c_str(),
+                      from_u32(room::g.me.fg));
+    if (focused && s.caret)
+        cv.vline(end + 1, s.entry.y + 3, s.entry.y + 3 + kFontHeight,
+                 dc.caret);
+
+    draw_button(cv, s.topic_btn, "Topic:", s.pressed_btn == 2, false, dc);
+    std::string status = room::status_copy();
+    if (!status.empty()) {
+        Rect line{s.topic_btn.right() + 8, s.topic_btn.y,
+                  cl.right() - 6 - (s.topic_btn.right() + 8), kTopicH};
+        cv.set_clip(line);
+        cv.text(line.x, line.y + (kTopicH - kFontHeight) / 2, status.c_str(),
+                dc.label);
+        cv.clear_clip();
+    }
+    paint_grip(cv, s.lay.grip, focused, nullptr);
+}
+
+void close_session() {
+    room::leave();
+    if (host_room::g.hosting.active) host_room::stop_hosting();
+}
+
+LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    ServerWin &s = g_server;
+    switch (msg) {
+        case WM_NCCALCSIZE:
+            if (wp) return 0;
+            break;
+        case WM_NCHITTEST:
+            return HTCLIENT;
+        case WM_LBUTTONDOWN: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (s.lay.close_box.contains(x, y)) {
+                s.pressed_box = 5;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (s.lay.min_box.contains(x, y)) {
+                CloseWindow(hwnd);
+                return 0;
+            }
+            int hit = s.chat_sb.on_press(x, y);
+            if (hit) {
+                s.follow = s.chat_sb.value >= s.chat_sb.max_value();
+                if (hit == 2) {
+                    s.drag = &s.chat_sb;
+                    s.drag_grab = y - s.chat_sb.thumb.y;
+                    SetCapture(hwnd);
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            hit = s.user_sb.on_press(x, y);
+            if (hit) {
+                if (hit == 2) {
+                    s.drag = &s.user_sb;
+                    s.drag_grab = y - s.user_sb.thumb.y;
+                    SetCapture(hwnd);
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            // The chat list and topic buttons press but have nothing behind
+            // them until multiple chats and topics exist.
+            int btn = s.chat_list_btn.contains(x, y)  ? 0
+                      : s.room_tab.contains(x, y)     ? 1
+                      : s.topic_btn.contains(x, y)    ? 2
+                                                      : -1;
+            if (btn >= 0) {
+                s.pressed_btn = btn;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (s.lay.grip.contains(x, y))
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_SIZE + 8, lp);
+            else if (y < s.lay.title_h)
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (s.drag) {
+                s.drag->drag_to(GET_Y_LPARAM(lp) - s.drag_grab);
+                if (s.drag == &s.chat_sb)
+                    s.follow = s.chat_sb.value >= s.chat_sb.max_value();
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_LBUTTONUP:
+            if (s.drag) {
+                ReleaseCapture();
+                s.drag = nullptr;
+                return 0;
+            }
+            if (s.pressed_box == 5) {
+                ReleaseCapture();
+                s.pressed_box = 0;
+                if (s.lay.close_box.contains(GET_X_LPARAM(lp),
+                                             GET_Y_LPARAM(lp))) {
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            if (s.pressed_btn >= 0) {
+                ReleaseCapture();
+                s.pressed_btn = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_MOUSEWHEEL: {
+            int steps = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
+            POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &p);
+            if (s.users.contains(p.x, p.y)) {
+                s.user_sb.set(s.user_sb.value - steps * 3);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            s.chat_sb.set(s.chat_sb.value - steps * 3);
+            s.follow = s.chat_sb.value >= s.chat_sb.max_value();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_CHAR: {
+            char c = char(wp);
+            if (c == '\b') {
+                if (!s.draft.empty()) s.draft.pop_back();
+            } else if (c == '\r') {
+                room::say(s.draft);
+                s.draft.clear();
+                s.follow = true;
+            } else if (c >= 32 && c < 127 && s.draft.size() < 400) {
+                s.draft += c;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+            return 0;
+        case room::WM_ROOM_EVENT:
+        case WM_SIZE:
+        case WM_ACTIVATE:
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_TIMER:
+            s.caret = !s.caret;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            paint_server();
+            blit_canvas(hdc, s.canvas);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_DESTROY:
+            close_session();
+            s.hwnd = nullptr;
+            if (g_main) {
+                SetForegroundWindow(g_main);
+                InvalidateRect(g_main, nullptr, FALSE);
+            }
+            return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+HWND open_server_window(HINSTANCE hinst);
+
+// Open (or reuse) the server window and point a session at it.
+void start_session(room::Role role, const std::string &id,
+                   const std::string &token, const std::string &name) {
+    HWND w = open_server_window(g_hinst);
+    room::start(role, w, id, token, name);
+    InvalidateRect(w, nullptr, FALSE);
+}
+
+HWND open_server_window(HINSTANCE hinst) {
+    ServerWin &s = g_server;
+    if (s.hwnd) {
+        SetForegroundWindow(s.hwnd);
+        return s.hwnd;
+    }
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSA wc{};
+        wc.lpfnWndProc = server_proc;
+        wc.hInstance = hinst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = "SagradoServer";
+        RegisterClassA(&wc);
+        registered = true;
+    }
+    s.draft.clear();
+    s.follow = true;
+    RECT mr{};
+    if (g_main) GetWindowRect(g_main, &mr);
+    s.hwnd = CreateWindowExA(0, "SagradoServer", "Sagrado Server", WS_POPUP,
+                             mr.right + 12, mr.top, kSrvW, kSrvH, nullptr,
+                             nullptr, hinst, nullptr);
+    ShowWindow(s.hwnd, SW_SHOW);
+    SetForegroundWindow(s.hwnd);
+    SetTimer(s.hwnd, 1, 500, nullptr);  // caret blink
+    return s.hwnd;
 }
 
 void blit_art(Canvas &cv, const ArtImage &a, int dx = 0, int dy = 0) {
@@ -953,7 +1381,7 @@ void menu_chosen(int id) {
 void open_commands_menu(int button) {
     bool hosting = host_room::g.hosting.active;
     std::vector<menu::Item> items{
-        {"Host a Room...", CmdHostRoom, !hosting, icon_of(kIcCommands), "^R",
+        {"Host a Server...", CmdHostRoom, !hosting, icon_of(kIcCommands), "^R",
          false},
         {"Stop Hosting", CmdStopHosting, hosting, {}, "", false},
         menu::separator(),
@@ -1056,6 +1484,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_TIMER: {
+            if (wp == 2) {  // keeps our tracker listing from lapsing
+                tracker::heartbeat(host_room::g.hosting);
+                return 0;
+            }
             bool f = GetForegroundWindow() == hwnd;
             if (f != g_app.focused) {
                 g_app.focused = f;
@@ -1102,8 +1534,10 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
                                 CW_USEDEFAULT, kWinW, kWinH, nullptr, nullptr,
                                 hinst, nullptr);
     g_main = hwnd;
+    room::init();
     ShowWindow(hwnd, show);
     SetTimer(hwnd, 1, 250, nullptr);
+    SetTimer(hwnd, 2, 30000, nullptr);
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0) {

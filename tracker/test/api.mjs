@@ -25,8 +25,8 @@ const reg = await post("/register", {
 });
 check(reg.status === 200 && reg.body.id && reg.body.token, "register");
 
-const bad = await post("/register", { name: "no addr" });
-check(bad.status === 400, "register rejects a room with no address");
+const bad = await post("/register", { description: "nameless" });
+check(bad.status === 400, "register rejects a room with no name");
 
 let list = await (await fetch(base + "/rooms")).json();
 check(list.rooms.length === 1 && list.rooms[0].name === "Loophole's Lair",

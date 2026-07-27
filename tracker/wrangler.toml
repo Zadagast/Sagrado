@@ -6,8 +6,17 @@ compatibility_date = "2025-07-01"
 name = "REGISTRY"
 class_name = "Registry"
 
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RoomRelay"
+
 [[migrations]]
-# v1 on this Worker was an unrelated first cut with a SagradoNetwork class.
+# v1 on this Worker was an unrelated first cut whose SagradoNetwork class this
+# migration deleted in production. The delete is not repeated here: a fresh
+# deployment (and `wrangler dev`) has no such class to drop.
 tag = "v2"
 new_sqlite_classes = ["Registry"]
-deleted_classes = ["SagradoNetwork"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["RoomRelay"]

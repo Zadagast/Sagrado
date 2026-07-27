@@ -42,6 +42,12 @@ inline bool request(const std::string &url, const std::string &body,
             conn, body.empty() ? L"GET" : L"POST", path, nullptr,
             WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         if (req) {
+            // Never reuse a pooled connection: the relay's WebSocket runs to
+            // the same host, and a request that grabbed that socket would
+            // write an HTTP request straight into the frame stream.
+            DWORD no_keepalive = WINHTTP_DISABLE_KEEP_ALIVE;
+            WinHttpSetOption(req, WINHTTP_OPTION_DISABLE_FEATURE,
+                             &no_keepalive, sizeof(no_keepalive));
             const wchar_t *hdr = L"Content-Type: application/json\r\n";
             if (WinHttpSendRequest(req, body.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS
                                                      : hdr,

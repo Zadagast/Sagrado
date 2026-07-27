@@ -18,6 +18,11 @@ $(KDX): src/kdx.cpp $(HDRS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ src/kdx.cpp $(LDFLAGS)
 
+# Console harness for the relay socket; not part of `all`.
+$(BUILD)/test_ws.exe: src/test_ws.cpp $(HDRS)
+	@mkdir -p $(BUILD)
+	$(CXX) -std=c++17 -O2 -Wall -o $@ src/test_ws.cpp -static -lwinhttp
+
 run: $(TARGET)
 	wine $(TARGET)
 

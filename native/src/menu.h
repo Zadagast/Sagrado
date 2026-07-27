@@ -41,6 +41,7 @@ using Notify = void (*)();
 // from the frame, labels at 26px, and a 12px right margin.
 constexpr int kItemH = 18;
 constexpr int kSepH = 18;
+constexpr int kFrame = 3; // the red window-frame ring around the panel
 constexpr int kIconX = 5;
 constexpr int kIconW = 16;
 constexpr int kLabelX = 26;
@@ -63,7 +64,7 @@ inline Popup g_menu;
 inline bool is_open() { return g_menu.hwnd != nullptr; }
 
 inline int item_top(int index) {
-    int y = 2;
+    int y = kFrame + 2;
     for (int i = 0; i < index; ++i)
         y += g_menu.items[i].id == 0 ? kSepH : kItemH;
     return y;
@@ -98,23 +99,33 @@ inline void paint(HDC hdc) {
     if (cv.width() != w || cv.height() != h) cv.resize(w, h);
     UiColors uc = ui_colors(nullptr);
 
-    Rect r{0, 0, w, h};
+    // An open menu wears the same red frame as a window: black edge, the
+    // lit/shaded red ramp, then the panel's own black edge and grey bevel.
+    ChromeColors cc = chrome_colors(true);
+    cv.fill({0, 0, w, h}, cc.body);
+    cv.frame({0, 0, w, h}, kBlack);
+    cv.hline(1, w - 1, 1, cc.bright);
+    cv.vline(1, 1, h - 1, cc.bright);
+    cv.hline(1, w - 1, h - 2, cc.deep);
+    cv.vline(w - 2, 1, h - 1, cc.deep);
+
+    Rect r{kFrame, kFrame, w - kFrame * 2, h - kFrame * 2};
     cv.fill(r, uc.bar_body);
     cv.frame(r, kBlack);
-    cv.hline(1, w - 1, 1, uc.bar_light);
-    cv.vline(1, 1, h - 1, uc.bar_light);
-    cv.hline(1, w - 1, h - 2, uc.bar_dark);
-    cv.vline(w - 2, 1, h - 1, uc.bar_dark);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, uc.bar_light);
+    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, uc.bar_light);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, uc.bar_dark);
+    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, uc.bar_dark);
 
     for (size_t i = 0; i < g_menu.items.size(); ++i) {
         const Item &it = g_menu.items[i];
         int top = item_top(int(i));
         if (it.id == 0) { // separator: an engraved line across the panel
-            cv.hline(1, w - 1, top + 7, uc.bar_dark);
-            cv.hline(1, w - 1, top + 8, uc.bar_light);
+            cv.hline(r.x + 1, r.right() - 1, top + 7, uc.bar_dark);
+            cv.hline(r.x + 1, r.right() - 1, top + 8, uc.bar_light);
             continue;
         }
-        Rect row{2, top, w - 4, kItemH};
+        Rect row{r.x + 2, top, r.w - 4, kItemH};
         bool hot = int(i) == g_menu.hot;
         if (hot) cv.fill(row, uc.hilite);
         Color fg = !it.enabled ? uc.bar_light : hot ? uc.hilite_text : uc.text;
@@ -124,16 +135,17 @@ inline void paint(HDC hdc) {
             for (int y = 0; y < it.icon.h; ++y)
                 for (int x = 0; x < it.icon.w; ++x) {
                     uint32_t p = it.icon.px[size_t(y) * it.icon.w + x];
-                    if (p != bg) cv.put(kIconX + x, iy + y, p);
+                    if (p != bg) cv.put(r.x + kIconX + x, iy + y, p);
                 }
         }
-        cv.text(kLabelX, row.y + 1, it.label.c_str(), fg);
+        cv.text(r.x + kLabelX, row.y + 1, it.label.c_str(), fg);
         if (!it.shortcut.empty()) {
             int sw = cv.text_width(it.shortcut.c_str());
-            cv.text(w - kRightPad - sw, row.y + 1, it.shortcut.c_str(), fg);
+            cv.text(r.right() - kRightPad - sw, row.y + 1, it.shortcut.c_str(),
+                    fg);
         }
         if (it.submenu) { // right-pointing triangle, as in the real menu
-            int ax = w - kRightPad - 4, ay = row.y + kItemH / 2;
+            int ax = r.right() - kRightPad - 4, ay = row.y + kItemH / 2;
             for (int k = 0; k < 5; ++k)
                 cv.vline(ax - 4 + k, ay - 4 + k, ay + 5 - k, fg);
         }
@@ -160,7 +172,9 @@ inline LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             RECT rc;
             GetClientRect(hwnd, &rc);
-            int hot = (p.x >= 0 && p.x < rc.right) ? item_at(p.y) : -1;
+            int hot = (p.x >= kFrame && p.x < rc.right - kFrame)
+                          ? item_at(p.y)
+                          : -1;
             if (hot != g_menu.hot) {
                 g_menu.hot = hot;
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -240,7 +254,7 @@ inline void open(HINSTANCE hinst, HWND owner, int sx, int sy,
     g_menu.armed = false;
 
     Canvas measure;
-    int wmax = 0, h = 4;
+    int wmax = 0, h = 4 + kFrame * 2;
     for (const Item &it : g_menu.items) {
         if (it.id == 0) {
             h += kSepH;
@@ -253,7 +267,7 @@ inline void open(HINSTANCE hinst, HWND owner, int sx, int sy,
         if (it.submenu) tw += kGapMin;
         if (tw > wmax) wmax = tw;
     }
-    int w = kLabelX + wmax + kRightPad;
+    int w = kLabelX + wmax + kRightPad + kFrame * 2;
 
     int screen_w = GetSystemMetrics(SM_CXSCREEN);
     int screen_h = GetSystemMetrics(SM_CYSCREEN);
