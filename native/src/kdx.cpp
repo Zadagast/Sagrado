@@ -117,12 +117,30 @@ const TrackerServer kServers[] = {
 constexpr int kServerCount = int(sizeof(kServers) / sizeof(kServers[0]));
 
 constexpr int kTrkW = 900, kTrkH = 600;
-constexpr int kRowH = 18, kHdrH = 17, kSbW = 13, kArrowLen = 12;
+constexpr int kPaneInset = 8;  // window margin + the pane's focus ring
+constexpr int kRowH = 18, kHdrH = 18, kSbW = 13, kArrowLen = 15;
 
-const Color kListBg{68, 68, 68};   // List Background
-const Color kSortBg{51, 51, 51};   // Sort Column Background
-const Color kSelFill{102, 0, 0};   // selected row band
-const Color kSelFrame{136, 0, 0};
+// Measured off the real KDX tracker window.
+const Color kListBg{68, 68, 68};     // List Background
+const Color kSortBg{51, 51, 51};     // Sort Column Background
+const Color kRowLine{102, 102, 102}; // 1px separator above each row
+const Color kSelFill{102, 0, 0};     // selected row band
+const Color kPlate{51, 51, 51};      // header / scrollbar plate face
+const Color kPlateHi{102, 102, 102};
+const Color kPlateLo{34, 34, 34};
+const Color kGlyph{136, 136, 136};   // scrollbar arrows
+const Color kFocusBorder{136, 0, 0}; // focused pane ring
+const Color kIdleBorder{17, 17, 17};
+
+// The raised plate used by header cells, scroll arrows and the thumb.
+inline void plate(Canvas &cv, Rect b) {
+    cv.fill(b, kPlate);
+    cv.frame(b, kBlack);
+    cv.hline(b.x + 1, b.right() - 1, b.y + 1, kPlateHi);
+    cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, kPlateHi);
+    cv.hline(b.x + 1, b.right() - 1, b.bottom() - 2, kPlateLo);
+    cv.vline(b.right() - 2, b.y + 1, b.bottom() - 1, kPlateLo);
+}
 
 // A KDX scrollbar: an arrow pair at each end, a draggable thumb between.
 struct ScrollBar {
@@ -165,32 +183,32 @@ struct ScrollBar {
     }
 
     void paint(Canvas &cv) const {
-        cv.fill(r, Color{51, 51, 51});
+        cv.fill(r, kPlate);
         cv.frame(r, kBlack);
-        auto plate = [&](Rect b) {
-            cv.fill(b, Color{102, 102, 102});
-            cv.frame(b, kBlack);
-            cv.hline(b.x + 1, b.right() - 1, b.y + 1, Color{136, 136, 136});
-            cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, Color{136, 136, 136});
-            cv.hline(b.x + 1, b.right() - 1, b.bottom() - 2, Color{51, 51, 51});
-            cv.vline(b.right() - 2, b.y + 1, b.bottom() - 1, Color{51, 51, 51});
-        };
         auto arrow = [&](Rect b, bool back) {
-            plate(b);
+            plate(cv, b);
             int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
             for (int i = 0; i < 4; ++i) {
                 int t = back ? i : 3 - i;
                 if (vertical)
-                    cv.hline(cx - t, cx + t + 1, cy - 2 + i, kWhite);
+                    cv.hline(cx - t, cx + t + 1, cy - 2 + i, kGlyph);
                 else
-                    cv.vline(cx - 2 + i, cy - t, cy + t + 1, kWhite);
+                    cv.vline(cx - 2 + i, cy - t, cy + t + 1, kGlyph);
             }
         };
         arrow(dec_a, true);
         arrow(inc_a, false);
         arrow(dec_b, true);
         arrow(inc_b, false);
-        plate(thumb);
+        plate(cv, thumb);
+        // Grip: four short lines at the thumb's center.
+        int cx = thumb.x + thumb.w / 2, cy = thumb.y + thumb.h / 2;
+        for (int i = 0; i < 4; ++i) {
+            if (vertical && thumb.h > 24)
+                cv.hline(cx - 4, cx + 4, cy - 4 + i * 2, kPlateHi);
+            else if (!vertical && thumb.w > 24)
+                cv.vline(cx - 4 + i * 2, cy - 4, cy + 4, kPlateHi);
+        }
     }
 
     // Handle a press; returns 1 for a step/page change, 2 when the thumb
@@ -266,26 +284,30 @@ struct ListPane {
     }
 };
 
-void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols) {
-    // Header: white-to-grey plate with dark labels.
+void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
+                bool focused) {
+    // Focus ring: red around the active pane, near-black otherwise.
+    Rect ring{p.r.x - 3, p.r.y - 3, p.r.w + 6, p.r.h + 6};
+    Color rc = focused ? kFocusBorder : kIdleBorder;
+    cv.fill({ring.x, ring.y, ring.w, 2}, rc);
+    cv.fill({ring.x, ring.bottom() - 2, ring.w, 2}, rc);
+    cv.fill({ring.x, ring.y, 2, ring.h}, rc);
+    cv.fill({ring.right() - 2, ring.y, 2, ring.h}, rc);
+    cv.frame({ring.x + 2, ring.y + 2, ring.w - 4, ring.h - 4}, kBlack);
+
+    // Header: a raised plate per column, white labels.
     cv.set_clip(p.header);
-    for (int y = 0; y < p.header.h; ++y) {
-        int v = 255 - (y * 60) / p.header.h;
-        cv.hline(p.header.x, p.header.right(), p.header.y + y,
-                 Color{uint8_t(v), uint8_t(v), uint8_t(v)});
-    }
+    cv.fill(p.header, kPlate);
     int x = p.header.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
+        plate(cv, {x, p.header.y, cols[i].w + 1, p.header.h});
         cv.text(x + 6, p.header.y + (p.header.h - kFontHeight) / 2 + 1,
-                cols[i].title, Color{51, 51, 51});
+                cols[i].title, kWhite);
         x += cols[i].w;
-        cv.vline(x, p.header.y + 1, p.header.bottom() - 1,
-                 Color{136, 136, 136});
     }
     cv.clear_clip();
-    cv.frame(p.header, kBlack);
 
-    // Body: list background with the sorted column tinted, full height.
+    // Body: list background, the sorted column tinted, row separators.
     cv.fill(p.body, kListBg);
     x = p.body.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
@@ -293,6 +315,8 @@ void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols) {
             cv.fill({x, p.body.y, cols[i].w, p.body.h}, kSortBg);
         x += cols[i].w;
     }
+    for (int y = p.body.y; y < p.body.bottom(); y += kRowH)
+        cv.hline(p.body.x, p.body.right(), y, kRowLine);
 
     p.vsb.paint(cv);
     p.hsb.paint(cv);
@@ -321,6 +345,7 @@ struct TrackerWnd {
     int pressed_box = 0;
     int sel_group = 4;  // General
     int sel_server = -1;
+    int focus_pane = 0;
     ChromeLayout lay{};
     ListPane groups, servers;
     ScrollBar *drag = nullptr;
@@ -366,19 +391,19 @@ void paint_tracker() {
     ListPane &sp = g_tracker.servers;
     int top_h = kHdrH + 10 * kRowH + kSbW;
     if (top_h > cl.h / 2) top_h = cl.h / 2;
-    gp.r = {cl.x + 2, cl.y + 2, cl.w - 4, top_h};
+    gp.r = {cl.x + kPaneInset, cl.y + kPaneInset, cl.w - 2 * kPaneInset,
+            top_h};
     gp.sort_col = 1;  // sorted by Group Name
     gp.layout(kGroupCols, kGroupColCount, kGroupCount);
-    paint_pane(cv, gp, kGroupCols, kGroupColCount);
+    paint_pane(cv, gp, kGroupCols, kGroupColCount,
+               focused && g_tracker.focus_pane == 0);
 
     cv.set_clip(gp.body);
     for (int i = gp.vsb.value;
          i < kGroupCount && gp.row_rect(i).y < gp.body.bottom(); ++i) {
         Rect row = gp.row_rect(i);
-        if (i == g_tracker.sel_group) {
-            cv.fill(row, kSelFill);
-            cv.frame(row, kSelFrame);
-        }
+        if (i == g_tracker.sel_group)
+            cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
         wsprintfA(cnt, "%d", servers_in_group(kGroups[i].name));
@@ -390,23 +415,22 @@ void paint_tracker() {
 
     int idx[kServerCount];
     int n = group_server_indices(idx);
-    int sp_bottom = lay.grip.h ? lay.grip.y - 2 : cl.bottom() - 2;
-    sp.r = {cl.x + 2, gp.r.bottom() + 6, cl.w - 4,
-            sp_bottom - gp.r.bottom() - 6};
+    int sp_bottom = lay.grip.h ? lay.grip.y - 3 : cl.bottom() - kPaneInset;
+    sp.r = {cl.x + kPaneInset, gp.r.bottom() + 9, cl.w - 2 * kPaneInset,
+            sp_bottom - gp.r.bottom() - 9};
     if (sp.r.h < kHdrH + kRowH + kSbW) sp.r.h = kHdrH + kRowH + kSbW;
     sp.sort_col = 3;  // sorted by Server Description
     sp.layout(kServerCols, kServerColCount, n);
-    paint_pane(cv, sp, kServerCols, kServerColCount);
+    paint_pane(cv, sp, kServerCols, kServerColCount,
+               focused && g_tracker.focus_pane == 1);
 
     cv.set_clip(sp.body);
     for (int i = sp.vsb.value; i < n && sp.row_rect(i).y < sp.body.bottom();
          ++i) {
         const TrackerServer &s = kServers[idx[i]];
         Rect row = sp.row_rect(i);
-        if (idx[i] == g_tracker.sel_server) {
-            cv.fill(row, kSelFill);
-            cv.frame(row, kSelFrame);
-        }
+        if (idx[i] == g_tracker.sel_server)
+            cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
         wsprintfA(cnt, "%d", s.users);
@@ -464,6 +488,7 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         ? g_tracker.groups.row_at(y)
                         : -1;
             if (g >= 0 && g < kGroupCount) {
+                g_tracker.focus_pane = 0;
                 g_tracker.sel_group = g;
                 g_tracker.sel_server = -1;
                 g_tracker.servers.vsb.value = 0;
@@ -471,6 +496,7 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (g_tracker.servers.body.contains(x, y)) {
+                g_tracker.focus_pane = 1;
                 int idx[kServerCount];
                 int n = group_server_indices(idx);
                 int row = g_tracker.servers.row_at(y);
