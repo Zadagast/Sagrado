@@ -1174,6 +1174,22 @@ void start_session(room::Role role, const std::string &id,
     InvalidateRect(w, nullptr, FALSE);
 }
 
+// Bring the public chat window forward. Real KDX's Chat command opens the
+// lobby for the server you are on; if you are not connected yet, Connect...
+// is the way in.
+void open_chat() {
+    if (g_server.hwnd) {
+        ShowWindow(g_server.hwnd, SW_RESTORE);
+        SetForegroundWindow(g_server.hwnd);
+        return;
+    }
+    if (room::g.running || room::g.connected) {
+        open_server_window(g_hinst);
+        return;
+    }
+    open_tracker(g_hinst);
+}
+
 HWND open_server_window(HINSTANCE hinst) {
     ServerWin &s = g_server;
     if (s.hwnd) {
@@ -1361,6 +1377,9 @@ void menu_chosen(int id) {
         case CmdConnect:
             open_tracker(g_hinst);
             break;
+        case CmdChat:
+            open_chat();
+            break;
         case CmdAbout:
             MessageBoxA(g_main,
                         "Sagrado KDX\n\nA modern peer-to-peer client in the "
@@ -1392,7 +1411,7 @@ void open_commands_menu(int button) {
         {"File Transfers", CmdTransfers, false, icon_of(kIcTransfers), "^T",
          false},
         {"File Browser", CmdBrowser, false, icon_of(kIcBrowser), "^F", false},
-        {"Chat", CmdChat, false, icon_of(kIcChat), "^H", false},
+        {"Chat", CmdChat, true, icon_of(kIcChat), "^H", false},
         {"News", CmdNews, false, icon_of(kIcNews), "^N", false},
         {"User List", CmdUserList, false, icon_of(kIcUsers), "^U", false},
         {"Settings", CmdSettings, false, icon_of(kIcSettings), "^;", false},
@@ -1415,6 +1434,10 @@ void run_command(int i, HWND hwnd) {
     }
     if (lstrcmpA(name, "Connect...") == 0) {
         open_tracker(g_hinst);
+        return;
+    }
+    if (lstrcmpA(name, "Chat") == 0) {
+        open_chat();
         return;
     }
     // Remaining commands come online one at a time.
@@ -1480,6 +1503,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (GetKeyState(VK_CONTROL) & 0x8000) {
                 if (wp == 'K') open_tracker(g_hinst);
                 if (wp == 'R') open_host_room(g_hinst);
+                if (wp == 'H') open_chat();
                 if (wp == 'Q') DestroyWindow(hwnd);
             }
             return 0;
