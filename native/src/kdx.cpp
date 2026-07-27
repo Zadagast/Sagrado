@@ -16,6 +16,7 @@
 #include "controls.h"
 #include "kdx_art.h"
 #include "host_room.h"
+#include "menu.h"
 #include "tracker.h"
 
 namespace {
@@ -56,6 +57,7 @@ struct App {
     int pressed_box = 0;
     int hot_box = 0;
     int pressed_btn = -1;
+    int menu_btn = -1;  // command button holding its menu open
     int connections = 0, transfers = 0;
 } g_app;
 
@@ -808,6 +810,19 @@ void draw_command(Canvas &cv, int i, bool pressed, const DialogColors &dc) {
     if (kCommands[i].icon == &kIcMessages) blit_art(cv, kWonderLight, off, off);
 }
 
+// A command button while its menu is down: the red hilite face the real
+// client shows, lit from the top and shading toward the bottom.
+void draw_command_hilite(Canvas &cv, int i, const DialogColors &dc) {
+    Rect r = command_rect(i);
+    cv.frame(r, dc.btn_frame);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kBright);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 2, Color{170, 0, 0});
+    cv.vgradient({r.x + 1, r.y + 3, r.w - 2, r.h - 4}, Color{136, 0, 0},
+                 Color{85, 0, 0});
+    blit_art(cv, *kCommands[i].icon);
+    cv.text(36, r.y + (r.h - kFontHeight) / 2, kCommands[i].label, kWhite);
+}
+
 void repaint(HWND hwnd) {
     RECT rc;
     GetClientRect(hwnd, &rc);
@@ -841,8 +856,12 @@ void repaint(HWND hwnd) {
 
     blit_art(cv, kMedallion);
 
-    for (int i = 0; i < kCommandCount; ++i)
-        draw_command(cv, i, g_app.pressed_btn == i, dc);
+    for (int i = 0; i < kCommandCount; ++i) {
+        if (i == g_app.menu_btn)
+            draw_command_hilite(cv, i, dc);
+        else
+            draw_command(cv, i, g_app.pressed_btn == i, dc);
+    }
 
     // Connection / transfer counters, as in the real footer.
     blit_art(cv, kFootUser1);
@@ -874,6 +893,92 @@ int button_at(int x, int y) {
     return -1;
 }
 
+// --- Commands menu -------------------------------------------------------
+// Clicking Commands drops a menu beside the button, as in the real client.
+// Entries that need a room connection stay dimmed until that lands.
+
+enum CommandId {
+    CmdHostRoom = 1,
+    CmdStopHosting,
+    CmdConnect,
+    CmdAddressBook,
+    CmdMessages,
+    CmdTransfers,
+    CmdBrowser,
+    CmdChat,
+    CmdNews,
+    CmdUserList,
+    CmdSettings,
+    CmdShowAddress,
+    CmdAbout,
+    CmdExit,
+};
+
+menu::Icon icon_of(const ArtImage &a) { return {a.w, a.h, a.px}; }
+
+void menu_closed() {
+    g_app.menu_btn = -1;
+    g_app.pressed_btn = -1;
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+}
+
+void menu_chosen(int id) {
+    switch (id) {
+        case CmdHostRoom:
+            open_host_room(g_hinst);
+            break;
+        case CmdStopHosting:
+            host_room::stop_hosting();
+            break;
+        case CmdConnect:
+            open_tracker(g_hinst);
+            break;
+        case CmdAbout:
+            MessageBoxA(g_main,
+                        "Sagrado KDX\n\nA modern peer-to-peer client in the "
+                        "Haxial KDX tradition.",
+                        "About Sagrado KDX", MB_OK);
+            break;
+        case CmdExit:
+            if (g_main) DestroyWindow(g_main);
+            break;
+        default:
+            break;
+    }
+}
+
+// Laid out like the real client's menu: an icon column, right-aligned
+// shortcuts and one engraved divider under the hosting commands. Entries that
+// need a room connection stay dimmed until that milestone lands.
+void open_commands_menu(int button) {
+    bool hosting = host_room::g.hosting.active;
+    std::vector<menu::Item> items{
+        {"Host a Room...", CmdHostRoom, !hosting, icon_of(kIcCommands), "^R",
+         false},
+        {"Stop Hosting", CmdStopHosting, hosting, {}, "", false},
+        menu::separator(),
+        {"Connect...", CmdConnect, true, icon_of(kIcConnect), "^K", false},
+        {"Address Book", CmdAddressBook, false, icon_of(kIcAddress), "^B",
+         false},
+        {"Messages", CmdMessages, false, icon_of(kIcMessages), "^M", false},
+        {"File Transfers", CmdTransfers, false, icon_of(kIcTransfers), "^T",
+         false},
+        {"File Browser", CmdBrowser, false, icon_of(kIcBrowser), "^F", false},
+        {"Chat", CmdChat, false, icon_of(kIcChat), "^H", false},
+        {"News", CmdNews, false, icon_of(kIcNews), "^N", false},
+        {"User List", CmdUserList, false, icon_of(kIcUsers), "^U", false},
+        {"Settings", CmdSettings, false, icon_of(kIcSettings), "^;", false},
+        {"Show My Address", CmdShowAddress, false, {}, "", false},
+        {"About", CmdAbout, true, icon_of(kIcAbout), "", false},
+        {"Exit", CmdExit, true, icon_of(kIcExit), "^Q", false},
+    };
+    Rect b = command_rect(button);
+    POINT p{b.x + 16, b.bottom() + 2};
+    ClientToScreen(g_main, &p);
+    menu::open(g_hinst, g_main, p.x, p.y, std::move(items), menu_chosen,
+               menu_closed);
+}
+
 void run_command(int i, HWND hwnd) {
     const char *name = kCommands[i].label;
     if (lstrcmpA(name, "Exit") == 0) {
@@ -882,10 +987,6 @@ void run_command(int i, HWND hwnd) {
     }
     if (lstrcmpA(name, "Connect...") == 0) {
         open_tracker(g_hinst);
-        return;
-    }
-    if (lstrcmpA(name, "Commands") == 0) {
-        open_host_room(g_hinst);  // the Commands menu starts with hosting
         return;
     }
     // Remaining commands come online one at a time.
@@ -912,8 +1013,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int b = button_at(x, y);
             if (b >= 0) {
                 g_app.pressed_btn = b;
-                SetCapture(hwnd);
                 InvalidateRect(hwnd, nullptr, FALSE);
+                // Menu buttons drop their menu on press and stay held down
+                // while it is up; the menu takes the mouse capture.
+                if (lstrcmpA(kCommands[b].label, "Commands") == 0) {
+                    g_app.menu_btn = b;
+                    open_commands_menu(b);
+                } else {
+                    SetCapture(hwnd);
+                }
                 return 0;
             }
             if (y < g_app.lay.title_h)
@@ -941,6 +1049,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+            if (GetKeyState(VK_CONTROL) & 0x8000) {
+                if (wp == 'K') open_tracker(g_hinst);
+                if (wp == 'R') open_host_room(g_hinst);
+                if (wp == 'Q') DestroyWindow(hwnd);
+            }
             return 0;
         case WM_TIMER: {
             bool f = GetForegroundWindow() == hwnd;
