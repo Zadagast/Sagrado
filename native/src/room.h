@@ -149,11 +149,16 @@ inline uint32_t parse_colour(const std::string &s, uint32_t fallback) {
     return v;
 }
 
-// This client's display name: the Windows user name until Settings exists.
+// This client's display name / colours. Settings writes these; until then we
+// fall back to the Windows user name and KDX green-on-black.
+inline std::string g_pref_nick;
+inline uint32_t g_pref_fg = kDefaultFg, g_pref_bg = kDefaultBg;
+
 inline std::string local_nick() {
+    if (!g_pref_nick.empty()) return g_pref_nick;
     char buf[64] = {0};
     DWORD n = sizeof(buf);
-    if (!GetUserNameA(buf, &n) || !buf[0]) return "New Sagrado User";
+    if (!GetUserNameA(buf, &n) || !buf[0]) return "New KDX User";
     return buf;
 }
 
@@ -374,6 +379,8 @@ inline void start(Role role, HWND notify, const std::string &id,
     g.token = token;
     g.server_name = server_name;
     g.me.nick = local_nick();
+    g.me.fg = g_pref_fg;
+    g.me.bg = g_pref_bg;
     g.running = true;
     {
         Guard lk(&g.lock);

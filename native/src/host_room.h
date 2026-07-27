@@ -11,6 +11,7 @@
 #include "chrome.h"
 #include "controls.h"
 #include "tracker.h"
+#include "settings.h"
 
 namespace host_room {
 
@@ -69,9 +70,9 @@ inline void paint() {
     bool focused = GetForegroundWindow() == g.hwnd;
     layout(rc.right, rc.bottom);
     paint_chrome(cv, g.lay, "Host a Server", focused, 0,
-                 g.pressed_box == 5 ? 1 : 0, nullptr);
+                 g.pressed_box == 5 ? 1 : 0, settings::active_theme());
 
-    DialogColors dc = dialog_colors(nullptr);
+    DialogColors dc = dialog_colors(settings::active_theme());
     cv.fill(g.lay.client, dc.workspace);
 
     const char *labels[] = {"Server Name:", "Description:"};

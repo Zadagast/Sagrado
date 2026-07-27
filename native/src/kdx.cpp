@@ -18,6 +18,7 @@
 #include "host_room.h"
 #include "menu.h"
 #include "room.h"
+#include "settings.h"
 #include "tracker.h"
 
 namespace {
@@ -378,7 +379,7 @@ void paint_tracker() {
     lay.max_box = {0, 0, 0, 0};
     g_tracker.lay = lay;
     paint_chrome(cv, lay, "Tracker: Sagrado Tracker", focused, 0,
-                 g_tracker.pressed_box == 5 ? 1 : 0, nullptr);
+                 g_tracker.pressed_box == 5 ? 1 : 0, settings::active_theme());
 
     Rect cl = lay.client;
     cv.fill(cl, Color{51, 51, 51});
@@ -458,7 +459,7 @@ void paint_tracker() {
                 kGlyph);
     }
     cv.clear_clip();
-    paint_grip(cv, lay.grip, focused, nullptr);
+    paint_grip(cv, lay.grip, focused, settings::active_theme());
 }
 
 void blit_canvas(HDC hdc, const Canvas &cv);
@@ -466,6 +467,7 @@ void start_session(room::Role role, const std::string &id,
                    const std::string &token, const std::string &name);
 void disconnect_server();
 void open_chat();
+void open_settings(HINSTANCE hinst);
 
 // Join whatever the server list has selected.
 void join_selected() {
@@ -795,6 +797,247 @@ void open_host_room(HINSTANCE hinst) {
     SetTimer(g.hwnd, 1, 500, nullptr);  // caret blink
 }
 
+// ---- Settings window ----
+// Identity + Appearance pages matching the real Haxial KDX Settings dialog.
+
+void invalidate_all_windows() {
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+    if (g_tracker.hwnd) InvalidateRect(g_tracker.hwnd, nullptr, FALSE);
+    if (host_room::g.hwnd) InvalidateRect(host_room::g.hwnd, nullptr, FALSE);
+    if (settings::g.hwnd) InvalidateRect(settings::g.hwnd, nullptr, FALSE);
+    if (HWND w = FindWindowA("SagradoServer", nullptr))
+        InvalidateRect(w, nullptr, FALSE);
+}
+
+LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    settings::Window &g = settings::g;
+    switch (msg) {
+        case WM_NCCALCSIZE:
+            if (wp) return 0;
+            break;
+        case WM_NCHITTEST:
+            return HTCLIENT;
+        case WM_LBUTTONDOWN: {
+            settings::close_picker();
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            settings::layout(rc.right, rc.bottom);
+            if (g.lay.close_box.contains(x, y)) {
+                g.pressed_box = 5;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (g.lay.min_box.contains(x, y)) {
+                CloseWindow(hwnd);
+                return 0;
+            }
+            auto press = [&](int id, Rect r) {
+                if (!r.contains(x, y)) return false;
+                g.pressed_btn = id;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return true;
+            };
+            if (press(0, g.cat) || press(1, g.cancel) || press(2, g.apply) ||
+                press(3, g.save))
+                return 0;
+            if (settings::g_page == settings::PageIdentity) {
+                if (g.name.contains(x, y)) {
+                    g.focus = settings::FocusName;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (g.desc.contains(x, y)) {
+                    g.focus = settings::FocusDesc;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (press(4, g.fg_sw) || press(5, g.bg_sw)) return 0;
+            } else {
+                if (press(4, g.appearance)) return 0;
+                auto hit_chk = [&](Rect r) {
+                    return x >= r.x && x < r.x + 200 && y >= r.y &&
+                           y < r.y + 16;
+                };
+                if (hit_chk(g.chk_file)) {
+                    settings::g_draft.small_file_icons =
+                        !settings::g_draft.small_file_icons;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (hit_chk(g.chk_user)) {
+                    settings::g_draft.small_user_icons =
+                        !settings::g_draft.small_user_icons;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (hit_chk(g.chk_bar)) {
+                    settings::g_draft.small_button_bar =
+                        !settings::g_draft.small_button_bar;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (press(5, g.font_title) || press(6, g.font_chat) ||
+                    press(7, g.font_files) || press(8, g.font_users))
+                    return 0;
+            }
+            if (y < g.lay.title_h)
+                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (g.pressed_box == 5) {
+                ReleaseCapture();
+                g.pressed_box = 0;
+                if (g.lay.close_box.contains(x, y))
+                    settings::cancel_and_close();
+                else
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (g.pressed_btn >= 0) {
+                ReleaseCapture();
+                int was = g.pressed_btn;
+                g.pressed_btn = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                auto at = [&](Rect r) { return r.contains(x, y); };
+                if (was == 0 && at(g.cat))
+                    settings::open_category_menu(g_hinst);
+                else if (was == 1 && at(g.cancel))
+                    settings::cancel_and_close();
+                else if (was == 2 && at(g.apply))
+                    settings::apply_draft(false);
+                else if (was == 3 && at(g.save)) {
+                    settings::apply_draft(true);
+                    if (g.hwnd) DestroyWindow(g.hwnd);
+                } else if (settings::g_page == settings::PageIdentity) {
+                    if (was == 4 && at(g.fg_sw)) {
+                        g.color_target = 0;
+                        POINT p{g.fg_sw.x, g.fg_sw.bottom()};
+                        ClientToScreen(hwnd, &p);
+                        settings::open_picker(g_hinst, p.x, p.y, 1);
+                    } else if (was == 5 && at(g.bg_sw)) {
+                        g.color_target = 1;
+                        POINT p{g.bg_sw.x, g.bg_sw.bottom()};
+                        ClientToScreen(hwnd, &p);
+                        settings::open_picker(g_hinst, p.x, p.y, 1);
+                    }
+                } else if (settings::g_page == settings::PageAppearance) {
+                    if (was == 4 && at(g.appearance)) {
+                        POINT p{g.appearance.x, g.appearance.bottom()};
+                        ClientToScreen(hwnd, &p);
+                        settings::open_picker(g_hinst, p.x, p.y, 0);
+                    } else if (was >= 5 && was <= 8) {
+                        MessageBoxA(hwnd,
+                                    "Font selection will land with a later "
+                                    "pass — Sagrado currently uses its built-in "
+                                    "pixel font.",
+                                    "KDX Settings", MB_OK);
+                    }
+                }
+            }
+            return 0;
+        }
+        case settings::WM_SETTINGS_PICK: {
+            int kind = int(wp), idx = int(lp);
+            if (kind == 0) {
+                if (idx <= 0)
+                    settings::g_draft.theme_name = "Haxial Standard";
+                else if (idx <= int(settings::g_theme.hap_names.size()))
+                    settings::g_draft.theme_name =
+                        settings::g_theme.hap_names[idx - 1];
+            } else if (kind == 1 && idx >= 0 &&
+                       idx < int(settings::g_pick.colors.size())) {
+                uint32_t c = settings::g_pick.colors[idx];
+                if (g.color_target == 0)
+                    settings::g_draft.fg = c;
+                else
+                    settings::g_draft.bg = c;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_CHAR: {
+            char c = char(wp);
+            std::string *t = g.focus == settings::FocusDesc
+                                 ? &settings::g_draft.description
+                                 : &settings::g_draft.nick;
+            if (c == '\b') {
+                if (!t->empty()) t->pop_back();
+            } else if (c == '\t') {
+                g.focus = g.focus == settings::FocusName ? settings::FocusDesc
+                                                         : settings::FocusName;
+            } else if (c == '\r') {
+                if (g.focus == settings::FocusDesc) *t += '\n';
+            } else if (c >= 32 && c < 127 && t->size() < 200) {
+                *t += c;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE) settings::cancel_and_close();
+            return 0;
+        case WM_TIMER:
+            g.caret = !g.caret;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ACTIVATE:
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            settings::paint();
+            blit_canvas(hdc, g.canvas);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_DESTROY:
+            settings::close_picker();
+            g.hwnd = nullptr;
+            if (g_main) SetForegroundWindow(g_main);
+            return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+void open_settings(HINSTANCE hinst) {
+    settings::Window &g = settings::g;
+    if (g.hwnd) {
+        SetForegroundWindow(g.hwnd);
+        return;
+    }
+    settings::g_draft = settings::g_prefs;
+    settings::g_page = settings::PageIdentity;
+    settings::invalidate_all = invalidate_all_windows;
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSA wc{};
+        wc.lpfnWndProc = settings_proc;
+        wc.hInstance = hinst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = "SagradoSettings";
+        RegisterClassA(&wc);
+        registered = true;
+    }
+    RECT mr{};
+    if (g_main) GetWindowRect(g_main, &mr);
+    g.hwnd = CreateWindowExA(0, "SagradoSettings", "KDX Settings", WS_POPUP,
+                             mr.right + 12, mr.top, settings::kW, settings::kH,
+                             g_main, nullptr, hinst, nullptr);
+    ShowWindow(g.hwnd, SW_SHOW);
+    SetForegroundWindow(g.hwnd);
+    SetTimer(g.hwnd, 1, 500, nullptr);
+}
+
 // ---- Chat window ----
 // The real KDX chat window: a Chat List button and the room's own tab along
 // the top, a black chat pane where each line is drawn in the speaker's own
@@ -915,9 +1158,9 @@ void paint_server() {
     if (name.empty()) name = "Sagrado Server";
     std::string title = "Chat: " + name;
     paint_chrome(cv, s.lay, title.c_str(), focused, 0,
-                 s.pressed_box == 5 ? 1 : 0, nullptr);
+                 s.pressed_box == 5 ? 1 : 0, settings::active_theme());
 
-    DialogColors dc = dialog_colors(nullptr);
+    DialogColors dc = dialog_colors(settings::active_theme());
     Rect cl = s.lay.client;
     cv.fill(cl, dc.workspace);
 
@@ -1005,7 +1248,7 @@ void paint_server() {
                 dc.label);
         cv.clear_clip();
     }
-    paint_grip(cv, s.lay.grip, focused, nullptr);
+    paint_grip(cv, s.lay.grip, focused, settings::active_theme());
 }
 
 // Tear down the relay session and, if we were hosting, the tracker listing.
@@ -1307,7 +1550,7 @@ void repaint(HWND hwnd) {
     g_app.lay.max_box = {0, 0, 0, 0};
 
     paint_chrome(cv, g_app.lay, "", g_app.focused, g_app.hot_box,
-                 g_app.pressed_box, nullptr);
+                 g_app.pressed_box, settings::active_theme());
 
     // Centered butterfly glyph + "KDX" title, as in the real window.
     {
@@ -1321,7 +1564,7 @@ void repaint(HWND hwnd) {
         cv.text(tx + kLogoW + 6, 4, title, tc);
     }
 
-    DialogColors dc = dialog_colors(nullptr);
+    DialogColors dc = dialog_colors(settings::active_theme());
     cv.fill(g_app.lay.client, dc.workspace);
 
     blit_art(cv, kMedallion);
@@ -1406,6 +1649,9 @@ void menu_chosen(int id) {
         case CmdChat:
             open_chat();
             break;
+        case CmdSettings:
+            open_settings(g_hinst);
+            break;
         case CmdAbout:
             MessageBoxA(g_main,
                         "Sagrado KDX\n\nA modern peer-to-peer client in the "
@@ -1440,7 +1686,7 @@ void open_commands_menu(int button) {
         {"Chat", CmdChat, true, icon_of(kIcChat), "^H", false},
         {"News", CmdNews, false, icon_of(kIcNews), "^N", false},
         {"User List", CmdUserList, false, icon_of(kIcUsers), "^U", false},
-        {"Settings", CmdSettings, false, icon_of(kIcSettings), "^;", false},
+        {"Settings", CmdSettings, true, icon_of(kIcSettings), "^;", false},
         {"Show My Address", CmdShowAddress, false, {}, "", false},
         {"About", CmdAbout, true, icon_of(kIcAbout), "", false},
         {"Exit", CmdExit, true, icon_of(kIcExit), "^Q", false},
@@ -1530,6 +1776,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (wp == 'K') open_tracker(g_hinst);
                 if (wp == 'R') open_host_room(g_hinst);
                 if (wp == 'H') open_chat();
+                if (wp == VK_OEM_1) open_settings(g_hinst);  // Ctrl+;
                 if (wp == 'Q') DestroyWindow(hwnd);
             }
             return 0;
@@ -1592,6 +1839,7 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
                                 hinst, nullptr);
     g_main = hwnd;
     room::init();
+    settings::boot();
     ShowWindow(hwnd, show);
     SetTimer(hwnd, 1, 250, nullptr);
     SetTimer(hwnd, 2, 30000, nullptr);
