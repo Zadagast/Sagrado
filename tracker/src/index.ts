@@ -1,16 +1,19 @@
 // Sagrado KDX tracker: the directory the Connect... window reads, plus the
 // relay that carries server traffic.
 //
-// Hosts POST /register with their server's details, then POST /heartbeat
-// every half minute or so; a server disappears once its heartbeat lapses.
-// The directory lives in one Durable Object so the list is globally
-// consistent.
+// Hosts POST /register with their server's details. While the host's relay
+// socket is open, heartbeats travel on that socket (kind 4) so the client
+// never needs a second WinHTTP request to the same tracker — under Wine that
+// pool clash corrupts the WebSocket. POST /heartbeat remains for tools and
+// for the brief window before the relay is up. A server disappears once its
+// heartbeat lapses. The directory lives in one Durable Object so the list is
+// globally consistent.
 //
 // Nobody listens for incoming connections: a host opens an outgoing WebSocket
 // to /relay/<id>?role=host and guests open one to /relay/<id>?role=guest, and
 // a per-server Durable Object shuffles frames between them. That works behind
-// any router or CGNAT without port forwarding. The relay only ever sees
-// opaque frames.
+// any router or CGNAT without port forwarding. Data payloads stay opaque;
+// the only frame the relay interprets is the host's heartbeat.
 
 export interface Env {
     REGISTRY: DurableObjectNamespace;
@@ -35,6 +38,9 @@ const MAX_FRAME = 256 * 1024;
 const KIND_DATA = 1;
 const KIND_JOIN = 2;
 const KIND_LEAVE = 3;
+// Host → relay only: refresh the listing TTL (and optional user count).
+// Payload is ASCII decimal users, or empty to leave users unchanged.
+const KIND_HEARTBEAT = 4;
 
 function envelope(peer: number, kind: number, payload: ArrayBuffer | null) {
     const body = payload ? new Uint8Array(payload) : new Uint8Array(0);
@@ -227,17 +233,27 @@ export class Registry {
 }
 
 // One instance per hosted server: the host's socket on one side, its guests'
-// on the other. Frames are forwarded verbatim; the relay never interprets a
-// payload.
+// on the other. Data frames are forwarded verbatim. Heartbeats from the host
+// refresh the directory listing without a separate HTTP call.
 export class RoomRelay {
+    private state: DurableObjectState;
+    private env: Env;
     private host: WebSocket | null = null;
     private guests = new Map<number, WebSocket>();
     private next = 1;
+    private roomId = "";
+    private token = "";
+
+    constructor(state: DurableObjectState, env: Env) {
+        this.state = state;
+        this.env = env;
+    }
 
     async fetch(req: Request): Promise<Response> {
         if (req.headers.get("upgrade") !== "websocket")
             return json({ error: "expected a websocket upgrade" }, 426);
-        const role = new URL(req.url).searchParams.get("role");
+        const url = new URL(req.url);
+        const role = url.searchParams.get("role");
         if (role !== "host" && role !== "guest")
             return json({ error: "role must be host or guest" }, 400);
         if (role === "guest" && !this.host)
@@ -248,8 +264,17 @@ export class RoomRelay {
         const pair = new WebSocketPair();
         const client = pair[0], server = pair[1];
         server.accept();
-        if (role === "host") this.attachHost(server);
-        else this.attachGuest(server);
+        if (role === "host") {
+            // Prefer the path segment the Worker already verified; fall back
+            // to the Durable Object name (idFromName) if the URL was rewritten.
+            const m = url.pathname.match(/\/relay\/([^/]+)$/);
+            this.roomId = m ? decodeURIComponent(m[1])
+                            : (this.state.id.name ?? "");
+            this.token = url.searchParams.get("token") ?? "";
+            this.attachHost(server);
+        } else {
+            this.attachGuest(server);
+        }
         return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -268,6 +293,10 @@ export class RoomRelay {
             const view = new DataView(ev.data);
             const peer = view.getUint32(0, true);
             const kind = view.getUint8(4);
+            if (kind === KIND_HEARTBEAT) {
+                void this.touchListing(ev.data.slice(5));
+                return;
+            }
             if (kind !== KIND_DATA) return;
             const payload = ev.data.slice(5);
             if (peer === 0) {
@@ -286,6 +315,28 @@ export class RoomRelay {
         };
         ws.addEventListener("close", drop);
         ws.addEventListener("error", drop);
+    }
+
+    private async touchListing(payload: ArrayBuffer) {
+        if (!this.roomId || !this.token) return;
+        const body: Record<string, unknown> = {
+            id: this.roomId,
+            token: this.token,
+        };
+        if (payload.byteLength > 0) {
+            const n = parseInt(new TextDecoder().decode(payload), 10);
+            if (!Number.isNaN(n))
+                body.users = Math.max(0, Math.min(9999, n));
+        }
+        const registry = this.env.REGISTRY.get(
+            this.env.REGISTRY.idFromName("global"));
+        try {
+            await registry.fetch("https://tracker/heartbeat", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+            });
+        } catch { /* listing may already be gone */ }
     }
 
     private attachGuest(ws: WebSocket) {

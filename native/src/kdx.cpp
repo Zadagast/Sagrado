@@ -1994,10 +1994,6 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_TIMER: {
-            if (wp == 2) {  // keeps our tracker listing from lapsing
-                tracker::heartbeat(host_room::g.hosting);
-                return 0;
-            }
             bool f = GetForegroundWindow() == hwnd;
             if (f != g_app.focused) {
                 g_app.focused = f;
@@ -2064,7 +2060,6 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     kit_theme_fn = &settings::active_theme;
     ShowWindow(hwnd, show);
     SetTimer(hwnd, 1, 250, nullptr);
-    SetTimer(hwnd, 2, 30000, nullptr);
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0) {

@@ -1,7 +1,8 @@
 // The tracker client: fetches the room directory from the Sagrado tracker
 // (a Cloudflare Worker) on a background thread and hands the parsed list to
-// the Connect... window. Hosting a room registers here too and keeps the
-// entry alive with heartbeats.
+// the Connect... window. Hosting a room registers here; while the relay
+// socket is open, heartbeats ride that socket (room.h) so WinHTTP is not
+// used concurrently with the WebSocket under Wine.
 #pragma once
 
 #include <time.h>
@@ -110,9 +111,10 @@ inline bool parse(const std::string &body, Directory &dir) {
     return true;
 }
 
-// A server this client is hosting, kept alive by heartbeats. Guests reach it
-// through the tracker's relay using the listing id, so no address is
-// published and nothing has to be port-forwarded.
+// A server this client is hosting. Guests reach it through the tracker's
+// relay using the listing id, so no address is published and nothing has to
+// be port-forwarded. Heartbeats go over the relay (room::send_heartbeat);
+// tracker::heartbeat remains for tools / the pre-relay window.
 struct Hosting {
     bool active = false;
     std::string id, token, name, group, description;
