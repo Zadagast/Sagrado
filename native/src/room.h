@@ -6,6 +6,10 @@
 // router without a forwarded port. The relay wraps every frame it hands the
 // host in [u32 peer][u8 kind][payload]; guests see the bare payload.
 //
+// While hosting, the listing heartbeat rides this same socket (kind 4) so the
+// client never opens a second WinHTTP request to the tracker alongside the
+// WebSocket — under Wine that pool clash corrupts the frame stream.
+//
 // The payload itself is line-based text, fields inside a line separated by
 // tabs (colours are RRGGBB hex, as KDX lets everyone pick their own):
 //     guest -> host   HELLO\n<nick>\t<fg>\t<bg>     CHAT\n<text>
@@ -33,7 +37,16 @@ constexpr uint32_t kDefaultFg = 0x00ff00, kDefaultBg = 0x000000;
 constexpr uint32_t kNoticeFg = 0xaaaaaa;
 
 enum Role { None, Host, Guest };
-enum Kind : uint8_t { KindData = 1, KindJoin = 2, KindLeave = 3 };
+enum Kind : uint8_t {
+    KindData = 1,
+    KindJoin = 2,
+    KindLeave = 3,
+    KindHeartbeat = 4,  // host → relay only; keeps the directory listing alive
+};
+
+// How often the host pings the relay so the listing does not lapse (matches
+// the tracker's heartbeat_ms = ROOM_TTL / 3).
+constexpr int kHeartbeatSec = 30;
 
 struct User {
     std::string nick;
@@ -86,6 +99,15 @@ struct Guard {
 inline void wake() {
     if (g.notify) PostMessage(g.notify, WM_ROOM_EVENT, 0, 0);
 }
+
+// Retarget room events (chat window closed, reopened, or handed to the
+// launcher). Does not touch the relay connection.
+inline void attach_notify(HWND hwnd) {
+    g.notify = hwnd;
+    wake();
+}
+
+inline bool on_server() { return g.running || g.connected; }
 
 inline void add_line(const std::string &text, uint32_t fg = kNoticeFg) {
     {
@@ -140,11 +162,16 @@ inline uint32_t parse_colour(const std::string &s, uint32_t fallback) {
     return v;
 }
 
-// This client's display name: the Windows user name until Settings exists.
+// This client's display name / colours. Settings writes these; until then we
+// fall back to the Windows user name and KDX green-on-black.
+inline std::string g_pref_nick;
+inline uint32_t g_pref_fg = kDefaultFg, g_pref_bg = kDefaultBg;
+
 inline std::string local_nick() {
+    if (!g_pref_nick.empty()) return g_pref_nick;
     char buf[64] = {0};
     DWORD n = sizeof(buf);
-    if (!GetUserNameA(buf, &n) || !buf[0]) return "New Sagrado User";
+    if (!GetUserNameA(buf, &n) || !buf[0]) return "New KDX User";
     return buf;
 }
 
@@ -174,6 +201,33 @@ inline bool send_to(unsigned peer, const std::string &payload) {
     memcpy(&frame[5], payload.data(), payload.size());
     Guard lk(&g.send_lock);
     return g.sock.send(frame);
+}
+
+// Refresh the tracker listing over the open relay socket. Payload is the
+// ASCII user count so the directory stays accurate without a WinHTTP call.
+inline bool send_heartbeat() {
+    if (g.role != Host || !g.connected) return false;
+    int users = 1;
+    {
+        Guard lk(&g.lock);
+        if (!g.users.empty()) users = int(g.users.size());
+    }
+    char num[16];
+    wsprintfA(num, "%d", users);
+    std::string frame(5, '\0');
+    frame[4] = char(KindHeartbeat);
+    frame += num;
+    Guard lk(&g.send_lock);
+    return g.sock.send(frame);
+}
+
+inline DWORD WINAPI heartbeat_thread(LPVOID) {
+    while (g.running && g.connected && g.role == Host) {
+        send_heartbeat();
+        for (int i = 0; i < kHeartbeatSec && g.running && g.connected; ++i)
+            Sleep(1000);
+    }
+    return 0;
 }
 
 inline std::string user_field(const User &u) {
@@ -319,28 +373,43 @@ inline DWORD WINAPI session_thread(LPVOID) {
         set_status("Hosting " + g.server_name + ".");
         add_line("Hosting \"" + g.server_name + "\". Waiting for guests.");
         refresh_users();
+        HANDLE beat =
+            CreateThread(nullptr, 0, heartbeat_thread, nullptr, 0, nullptr);
         host_loop();
+        g.connected = false;  // stop the heartbeat thread's send loop
+        if (beat) {
+            WaitForSingleObject(beat, 2000);
+            CloseHandle(beat);
+        }
     } else {
         set_status("Connected.");
         add_line("Connected to \"" + g.server_name + "\".");
         guest_loop();
     }
     g.connected = false;
+    g.sock.close();
     if (g.running) add_line("Disconnected.");
     g.running = false;
     set_status("Disconnected.");
     return 0;
 }
 
+// Drop the session. Must be safe to call from the UI thread (chat window
+// WM_DESTROY): never tear WinHTTP handles down while the worker is blocked in
+// Receive — that deadlocks under Wine. interrupt() unblocks it; the worker
+// closes the socket; we only wait.
 inline void leave() {
-    if (!g.running && !g.connected) return;
+    if (!g.thread && !g.running && !g.connected) return;
+    g.notify = nullptr;  // window may be going away
     g.running = false;
-    g.sock.close();
+    g.sock.interrupt();
     if (g.thread) {
-        WaitForSingleObject(g.thread, 2000);
+        WaitForSingleObject(g.thread, 3000);
         CloseHandle(g.thread);
         g.thread = nullptr;
     }
+    g.sock.close();
+    g.connected = false;
     Guard lk(&g.lock);
     g.peers.clear();
     g.users.clear();
@@ -357,6 +426,8 @@ inline void start(Role role, HWND notify, const std::string &id,
     g.token = token;
     g.server_name = server_name;
     g.me.nick = local_nick();
+    g.me.fg = g_pref_fg;
+    g.me.bg = g_pref_bg;
     g.running = true;
     {
         Guard lk(&g.lock);

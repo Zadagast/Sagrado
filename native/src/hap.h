@@ -130,9 +130,24 @@ enum Slot : int {
     SlotWindowResizeFocus = 244,
     SlotColumnHeaderNormal = 150,
     SlotColumnHeaderHilited = 151,
+    SlotHScrollDoubleArrows = 162, // 162..170 mirror the vertical set
+    SlotHScrollIndicatorNormal = 166,
+    SlotHScrollGripsNormal = 169,
     SlotVScrollDoubleArrows = 181,
     SlotVScrollIndicatorNormal = 185,
     SlotVScrollGripsNormal = 188,
+};
+
+// Icons section indices (AppearanceEdit Icons panel). Sparse; art themes
+// only author a subset. Pairs are typically 16×16 at N and ~32×32 at N+1.
+// Names below are from probing common Appearances (Ashen, Function, Mjolnir).
+enum HapIcon : int {
+    IconFileGeneric16 = 4,
+    IconFileGeneric32 = 5,
+    IconUser16 = 44, // person/bust mark used in user lists
+    IconUser32 = 45,
+    IconFolder16 = 64,
+    IconFolder32 = 65,
 };
 
 // A widget texture: ARGB pixels (A=0 means transparent), with the 9-slice
@@ -151,10 +166,35 @@ struct Theme {
     bool has_colors = false;
     uint32_t colors[kColorTableLen] = {}; // 0x00RRGGBB
     std::map<int, ThemeImage> images;
+    // Icons section (AppearanceEdit Icons panel): file-type and UI marks,
+    // typically paired as 16×16 then 32×32 at consecutive indices.
+    std::map<int, ThemeImage> icons;
 
     const ThemeImage *image(int slot) const {
         auto it = images.find(slot);
         return it == images.end() ? nullptr : &it->second;
+    }
+    const ThemeImage *icon(int slot) const {
+        auto it = icons.find(slot);
+        return it == icons.end() ? nullptr : &it->second;
+    }
+    // Prefer a 16×16 icon; fall back to any size at `slot`, then `slot+1`.
+    const ThemeImage *icon16(int slot) const {
+        if (const ThemeImage *a = icon(slot))
+            if (a->w <= 20 && a->h <= 20) return a;
+        if (const ThemeImage *b = icon(slot + 1))
+            if (b->w <= 20 && b->h <= 20) return b;
+        if (const ThemeImage *a = icon(slot)) return a;
+        return icon(slot + 1);
+    }
+    // Prefer a ~32×32 icon (Identity well, large file lists).
+    const ThemeImage *icon32(int slot) const {
+        if (const ThemeImage *a = icon(slot))
+            if (a->w >= 24 && a->h >= 24) return a;
+        if (const ThemeImage *b = icon(slot + 1))
+            if (b->w >= 24 && b->h >= 24) return b;
+        if (const ThemeImage *b = icon(slot + 1)) return b;
+        return icon(slot);
     }
     uint32_t color(int i) const {
         return (i >= 0 && i < kColorTableLen) ? colors[i] : 0;
@@ -233,6 +273,7 @@ inline bool load_hap(const std::string &path, Theme &theme) {
     size_t info_off = rd32(d, 0x2c), info_len = rd32(d, 0x30);
     size_t img_off = rd32(d, 0x34), img_len = rd32(d, 0x38);
     size_t col_off = rd32(d, 0x3c), col_len = rd32(d, 0x40);
+    size_t ico_off = rd32(d, 0x44), ico_len = rd32(d, 0x48);
 
     // Metadata: 4 string lengths at +0x22, strings at +0x34.
     if (info_len >= 0x34 && info_off + 0x34 <= d.size()) {
@@ -248,22 +289,27 @@ inline bool load_hap(const std::string &path, Theme &theme) {
         theme.colors[i] = rd32(d, col_off + 4 * i) & 0x00ffffff;
     theme.has_colors = n > 0;
 
-    if (img_len > 0) {
-        // Offset table (relative to section start) runs to the first record.
+    auto load_image_table = [&](size_t sec_off, size_t sec_len,
+                                std::map<int, ThemeImage> &out) {
+        if (sec_len == 0 || sec_off + sec_len > d.size()) return;
         size_t first_record = SIZE_MAX;
         std::vector<size_t> offsets;
         for (size_t i = 0; 4 * i < first_record; ++i) {
-            if (first_record == SIZE_MAX && i > 4096) return false;
-            size_t v = rd32(d, img_off + 4 * i);
+            if (first_record == SIZE_MAX && i > 4096) return;
+            if (sec_off + 4 * i + 4 > d.size()) return;
+            size_t v = rd32(d, sec_off + 4 * i);
             if (v != 0 && v < first_record) first_record = v;
             offsets.push_back(v);
         }
         for (size_t slot = 0; slot < offsets.size(); ++slot) {
             if (offsets[slot] == 0) continue;
             ThemeImage img;
-            if (parse_image(d, img_off + offsets[slot], img))
-                theme.images[int(slot)] = std::move(img);
+            if (parse_image(d, sec_off + offsets[slot], img))
+                out[int(slot)] = std::move(img);
         }
-    }
+    };
+
+    load_image_table(img_off, img_len, theme.images);
+    load_image_table(ico_off, ico_len, theme.icons);
     return true;
 }

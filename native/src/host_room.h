@@ -1,6 +1,7 @@
 // The Host a Server window: names a server, registers it with the Sagrado
-// tracker and keeps the listing alive with heartbeats. Guests arrive over the
-// tracker's relay, so there is nothing to listen on and no port to forward.
+// tracker, then opens the relay. Guests arrive over that relay, so there is
+// nothing to listen on and no port to forward. The listing stays alive via
+// heartbeats on the relay socket (see room.h), not a second HTTP channel.
 // Drawn on the Sagrado Kit like every other window — chrome, fields and
 // buttons from the kit, no native controls.
 #pragma once
@@ -11,6 +12,7 @@
 #include "chrome.h"
 #include "controls.h"
 #include "tracker.h"
+#include "settings.h"
 
 namespace host_room {
 
@@ -28,6 +30,7 @@ struct Window {
     bool caret = true;
     int pressed_btn = -1;  // 0 host/stop, 1 close
     int group = 4;         // General
+    TitleDrag title_drag{};
     std::string name, description;
     std::string status;
     bool busy = false;
@@ -43,8 +46,9 @@ inline std::string *focused_text() {
 }
 
 inline void layout(int w, int h) {
-    g.lay = chrome_layout(w, h, nullptr, GetForegroundWindow() == g.hwnd);
-    g.lay.max_box = {0, 0, 0, 0};
+    g.lay = chrome_layout(w, h, settings::active_theme(),
+                          GetForegroundWindow() == g.hwnd);
+    chrome_dialog_boxes(g.lay);
     g.lay.grip = {0, 0, 0, 0};
     int lx = g.lay.client.x + 14, fx = lx + 96;
     int fw = g.lay.client.right() - 14 - fx;
@@ -68,10 +72,10 @@ inline void paint() {
         cv.resize(rc.right, rc.bottom);
     bool focused = GetForegroundWindow() == g.hwnd;
     layout(rc.right, rc.bottom);
-    paint_chrome(cv, g.lay, "Host a Server", focused, 0,
-                 g.pressed_box == 5 ? 1 : 0, nullptr);
+    paint_chrome(cv, g.lay, "Host a Server", focused, 0, g.pressed_box,
+                 settings::active_theme());
 
-    DialogColors dc = dialog_colors(nullptr);
+    DialogColors dc = dialog_colors(settings::active_theme());
     cv.fill(g.lay.client, dc.workspace);
 
     const char *labels[] = {"Server Name:", "Description:"};
@@ -131,6 +135,30 @@ inline void start_hosting() {
 inline void stop_hosting() {
     tracker::unregister(g.hosting);
     g.status = "Server removed from the tracker.";
+}
+
+// Same as stop_hosting, but the HTTP call runs off the UI thread so closing
+// the chat window cannot hitch the message pump on a tracker round-trip.
+inline DWORD WINAPI unregister_thread(LPVOID p) {
+    auto *h = static_cast<tracker::Hosting *>(p);
+    tracker::unregister(*h);
+    delete h;
+    return 0;
+}
+
+inline void stop_hosting_async() {
+    if (!g.hosting.active) return;
+    auto *h = new tracker::Hosting(g.hosting);
+    g.hosting.active = false;
+    g.hosting.id.clear();
+    g.hosting.token.clear();
+    g.status = "Server removed from the tracker.";
+    if (HANDLE t = CreateThread(nullptr, 0, unregister_thread, h, 0, nullptr))
+        CloseHandle(t);
+    else {
+        tracker::unregister(*h);
+        delete h;
+    }
 }
 
 }  // namespace host_room

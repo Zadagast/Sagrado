@@ -11,6 +11,7 @@
 #include "chrome.h"
 #include "controls.h"
 #include "editor.h"
+#include "winpos.h"
 
 namespace {
 
@@ -487,6 +488,13 @@ void paint_content(Canvas &cv, const ChromeLayout &lay) {
         theme ? theme->image(SlotVScrollIndicatorNormal) : nullptr;
     if (ind) {
         cv.nine_slice(*ind, thumb);
+        const ThemeImage *grips =
+            theme ? theme->image(SlotVScrollGripsNormal) : nullptr;
+        if (grips && grips->w > 0 && grips->h > 0 && th >= grips->h + 4) {
+            int gx = thumb.x + (thumb.w - grips->w) / 2;
+            int gy = thumb.y + (thumb.h - grips->h) / 2;
+            cv.blit_image(*grips, gx, gy);
+        }
     } else {
         cv.fill(thumb, uc.thumb);
         cv.frame(thumb, kBlack);
@@ -812,7 +820,11 @@ LRESULT CALLBACK find_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "find", false);
+            return 0;
         case WM_DESTROY:
+            winpos::remember(hwnd, "find", false);
             KillTimer(hwnd, 1);
             g_find.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
@@ -846,10 +858,11 @@ void open_find_dialog(HINSTANCE hinst) {
     g_find.caret_on = true;
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    int px = mr.left + 40, py = mr.top + 80;
+    int x = mr.left + 40, y = mr.top + 80, w = kDlgW, h = kDlgH;
+    winpos::resolve("find", x, y, w, h, false);
     g_find.hwnd = CreateWindowExA(0, "SagradoDialog", "Find and Replace",
-                                  WS_POPUP, px, py, kDlgW, kDlgH, g_main,
-                                  nullptr, hinst, nullptr);
+                                  WS_POPUP, x, y, w, h, g_main, nullptr, hinst,
+                                  nullptr);
     ShowWindow(g_find.hwnd, SW_SHOW);
     SetForegroundWindow(g_find.hwnd);
     SetTimer(g_find.hwnd, 1, 500, nullptr);
@@ -1174,7 +1187,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "textedit", true);
+            return 0;
         case WM_DESTROY:
+            winpos::remember(hwnd, "textedit", true);
             PostQuitMessage(0);
             return 0;
     }
@@ -1206,11 +1223,11 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
 
     // Plain popup: no WS_CAPTION/WS_THICKFRAME, so no window manager under
     // Wine adds its own decorations. Move/resize are handled manually.
-    HWND hwnd = CreateWindowExA(
-        0, "SagradoWindow", "Sagrado TextEdit",
-        WS_POPUP | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 760, 520, nullptr, nullptr, hinst,
-        nullptr);
+    int x = 80, y = 80, w = 760, h = 520;
+    winpos::resolve("textedit", x, y, w, h, true);
+    HWND hwnd = CreateWindowExA(0, "SagradoWindow", "Sagrado TextEdit",
+                                WS_POPUP | WS_MINIMIZEBOX | WS_MAXIMIZEBOX, x, y,
+                                w, h, nullptr, nullptr, hinst, nullptr);
     g_main = hwnd;
     ShowWindow(hwnd, show);
     // Focus watchdog: some window managers (Wine/X11) don't deliver

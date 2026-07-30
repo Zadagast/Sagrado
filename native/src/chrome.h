@@ -2,6 +2,9 @@
 // real Haxial TextEdit: one solid red slab (title bar + borders) with the
 // client area cut out, lit from the top-left.
 #pragma once
+#include <windows.h>
+#include <cstdlib>
+
 #include "canvas.h"
 
 // Standard color ramp (Haxial Standard color table entries 36..40).
@@ -36,6 +39,27 @@ inline Color from_u32(uint32_t v) {
     return {uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
 }
 
+// True when a .hap left the Standard red pair (#CC0000 / #880000) untouched —
+// common on art themes that only edit Focus Box / Primary / Button.
+inline bool hap_stock_red_pair(const Theme *theme, int light, int body) {
+    return theme && theme->has_colors && theme->color(light) == 0x00cc0000 &&
+           theme->color(body) == 0x00880000;
+}
+
+inline Color hap_scale(uint32_t rgb, int num, int den) {
+    auto ch = [&](int shift) -> uint8_t {
+        return uint8_t(((rgb >> shift) & 0xff) * num / den);
+    };
+    return {ch(16), ch(8), ch(0)};
+}
+
+// 3-step accent ramp from Focus Box (default rings, stock Window Focus).
+inline void hap_focus_ramp(uint32_t focus, Color &hi, Color &mid, Color &lo) {
+    hi = from_u32(focus);
+    mid = hap_scale(focus, 2, 3);
+    lo = hap_scale(focus, 2, 5);
+}
+
 struct ChromeColors {
     Color bright, body, deep;
 };
@@ -57,6 +81,28 @@ inline FramePalette frame_palette(const Theme *theme, bool focused) {
     if (theme && theme->has_colors) {
         auto c = [&](int i) { return from_u32(theme->color(i)); };
         int base = focused ? ColWindowFocusLight2 : ColWindowLight2;
+        // Art themes often leave Window Focus at Standard red while editing
+        // Focus Box (purple on Gamespot, etc.). Menus and color-only frames
+        // should follow that accent instead of the leftover red ramp.
+        bool stock_focus =
+            focused && hap_stock_red_pair(theme, ColWindowFocusLight2,
+                                          ColWindowFocusLight2 + 2);
+        if (stock_focus) {
+            Color hi, mid, lo;
+            hap_focus_ramp(theme->color(ColFocusBox), hi, mid, lo);
+            p.cc = {hi, mid, lo};
+            p.frame = c(base + 5);
+            p.label = c(ColPrimaryLabel);
+            for (int i = 0; i < 18; ++i) {
+                // Blend lo → hi across the title gradient.
+                int num = i, den = 17;
+                auto mix = [&](uint8_t a, uint8_t b) -> uint8_t {
+                    return uint8_t(a + (int(b) - int(a)) * num / den);
+                };
+                p.grad[i] = {mix(lo.r, hi.r), mix(lo.g, hi.g), mix(lo.b, hi.b)};
+            }
+            return p;
+        }
         p.cc = {c(base + 1), c(base + 2), c(base + 3)};
         p.frame = c(base + 5);
         p.label = c(base + 6);
@@ -281,30 +327,37 @@ inline void paint_chrome(Canvas &cv, const ChromeLayout &lay, const char *title,
              pal.frame);
     cv.frame(win, pal.frame);
 
-    // Title, centred, in the KDX pixel font (Window Label entry).
+    // Title, centred. Prefer Primary Label — bitmap themes leave Window
+    // Label at default white while authors edit Primary Label.
     int tw = cv.text_width(title);
-    cv.text((win.w - tw) / 2, (kTitleH - kFontHeight) / 2, title, pal.label);
+    Color title_c = pal.label;
+    if (theme && theme->has_colors) {
+        uint32_t v = theme->color(focused ? ColPrimaryLabel
+                                          : ColPrimaryDisableLabel);
+        title_c = from_u32(v);
+    }
+    cv.text((win.w - tw) / 2, (kTitleH - kFontHeight) / 2, title, title_c);
 
     // Title-bar boxes, measured from the real window: 1px black outlines
     // over the gradient (no fill, no bevel) with thick white glyphs.
     if (lay.close_box.w > 0) {
         flat_box(cv, lay.close_box, pressed_box == 1, cc, pal.frame);
-        close_glyph(cv, lay.close_box, pal.label);
+        close_glyph(cv, lay.close_box, title_c);
     }
     if (lay.hatch_box.w > 0) {
         flat_box(cv, lay.hatch_box, false, cc, pal.frame);
         diagonal_hatch(cv, {lay.hatch_box.x + 2, lay.hatch_box.y + 2,
                             lay.hatch_box.w - 4, lay.hatch_box.h - 4},
-                       pal.label);
+                       title_c);
     }
     if (lay.max_box.w > 0) {
         flat_box(cv, lay.max_box, pressed_box == 3, cc, pal.frame);
-        cv.fill({lay.max_box.x + 1, lay.max_box.y + 6, 10, 2}, pal.label);
-        cv.fill({lay.max_box.x + 5, lay.max_box.y + 2, 2, 10}, pal.label);
+        cv.fill({lay.max_box.x + 1, lay.max_box.y + 6, 10, 2}, title_c);
+        cv.fill({lay.max_box.x + 5, lay.max_box.y + 2, 2, 10}, title_c);
     }
     if (lay.min_box.w > 0) {
         flat_box(cv, lay.min_box, pressed_box == 4, cc, pal.frame);
-        cv.fill({lay.min_box.x + 1, lay.min_box.y + 6, 10, 2}, pal.label);
+        cv.fill({lay.min_box.x + 1, lay.min_box.y + 6, 10, 2}, title_c);
     }
 
     (void)hot_box;
@@ -345,15 +398,18 @@ struct UiColors {
     Color bar_light, bar_body, bar_dark; // menu/tab bars, dropdowns
     Color text;                          // bar labels
     Color hilite, hilite_text;           // menu hilite bar
+    Color hilite_light, hilite_dark;     // menu hilite bevel
+    Color disable_text;                  // ColMenuDisableLabel
     Color editor_bg, editor_fg;          // text box background/foreground
-    Color track, thumb, thumb_hi;        // scrollbar
+    Color track, thumb, thumb_hi;        // scrollbar (legacy shorthand)
     Color tab, tab_light, tab_dark, tab_text; // active tab plate
 };
 
 inline UiColors ui_colors(const Theme *theme) {
     if (!theme || !theme->has_colors)
         return {kBarLight, kBarBody, kBarDark, kWhite,
-                kBody,     kWhite,   kBlack,   Color{0, 204, 0},
+                kBody,     kWhite,   kBright,  kDeep,
+                kGlyphGrey, kBlack,  Color{0, 204, 0},
                 kTrack,    kThumb,   kThumbHi, kBody,
                 kBright,   kDeep,    kWhite};
     auto c = [&](int i) { return from_u32(theme->color(i)); };
@@ -363,6 +419,9 @@ inline UiColors ui_colors(const Theme *theme) {
             c(ColMenuLabel),
             c(ColMenuHiliteBackground),
             c(ColMenuHiliteLabel),
+            c(ColMenuHiliteLight),
+            c(ColMenuHiliteDark),
+            c(ColMenuDisableLabel),
             c(ColTextBoxBackground),
             c(ColTextBoxForeground),
             c(ColScrollBarBkgnd),
@@ -374,11 +433,148 @@ inline UiColors ui_colors(const Theme *theme) {
             c(ColPrimaryLabel)};
 }
 
+// List panes (tracker, user lists): HapColor 15–20.
+struct ListColors {
+    Color bg, label, hilite_bg, hilite_fg, sort_bg, separator;
+    Color focus_ring, idle_ring;
+};
+
+inline ListColors list_colors(const Theme *theme) {
+    if (!theme || !theme->has_colors)
+        return {Color{68, 68, 68}, kWhite, Color{102, 0, 0}, kWhite,
+                Color{51, 51, 51}, Color{102, 102, 102},
+                Color{136, 0, 0}, Color{17, 17, 17}};
+    auto c = [&](int i) { return from_u32(theme->color(i)); };
+    return {c(ColListBackground),
+            c(ColListLabel),
+            c(ColListHiliteBackground),
+            c(ColListHiliteForeground),
+            c(ColListSortColumnBackground),
+            c(ColListSeparator),
+            c(ColFocusBox),
+            c(ColPrimaryFrame)};
+}
+
+// Column headers / tab plates: HapColor 174–182 (+ Primary Label for text).
+struct HeaderColors {
+    Color frame, light, face, dark, label;
+    Color hilite_light, hilite, hilite_dark, hilite_label;
+};
+
+inline HeaderColors header_colors(const Theme *theme) {
+    if (!theme || !theme->has_colors)
+        return {kBlack, Color{102, 102, 102}, Color{51, 51, 51},
+                Color{34, 34, 34}, kWhite,
+                kBright, kBody, kDeep, kWhite};
+    auto c = [&](int i) { return from_u32(theme->color(i)); };
+    // Title/header labels follow Primary Label (AppearanceEdit authors edit
+    // that; Column Header Label often stays default white on art themes).
+    return {c(ColColumnHeaderFrame),
+            c(ColColumnHeaderLight),
+            c(ColColumnHeader),
+            c(ColColumnHeaderDark),
+            c(ColPrimaryLabel),
+            c(ColColumnHeaderHiliteLight),
+            c(ColColumnHeaderHilite),
+            c(ColColumnHeaderHiliteDark),
+            c(ColPrimaryLabel)};
+}
+
+// Scrollbars: HapColor 128–147.
+struct ScrollColors {
+    Color frame, light, face, dark, label;
+    Color track_l2, track_l1, track, track_d1, track_d2;
+    Color thumb_l, thumb, thumb_d;
+};
+
+inline ScrollColors scroll_colors(const Theme *theme) {
+    if (!theme || !theme->has_colors)
+        return {kBlack, Color{102, 102, 102}, Color{51, 51, 51},
+                Color{34, 34, 34}, Color{136, 136, 136},
+                Color{102, 102, 102}, Color{68, 68, 68}, Color{51, 51, 51},
+                Color{34, 34, 34}, Color{17, 17, 17},
+                Color{102, 102, 102}, Color{51, 51, 51}, Color{34, 34, 34}};
+    auto c = [&](int i) { return from_u32(theme->color(i)); };
+    return {c(ColScrollBarFrame),
+            c(ColScrollBarLight),
+            c(ColScrollBar),
+            c(ColScrollBarDark),
+            c(ColScrollBarLabel),
+            c(ColScrollBarBkgndLight2),
+            c(ColScrollBarBkgndLight2 + 1),
+            c(ColScrollBarBkgnd),
+            c(ColScrollBarBkgndLight2 + 3),
+            c(ColScrollBarBkgndLight2 + 4),
+            c(ColScrollBarIndicatorLight),
+            c(ColScrollBarIndicator),
+            c(ColScrollBarIndicatorDark)};
+}
+
+// Process-wide theme accessor so kit surfaces (menus, etc.) can resolve
+// colours without each app threading a Theme* through every call. KDX sets
+// this to settings::active_theme; TextEdit can point it at its own getter.
+inline const Theme *(*kit_theme_fn)() = nullptr;
+inline const Theme *kit_theme() {
+    return kit_theme_fn ? kit_theme_fn() : nullptr;
+}
+
+// Title-bar control ids — match paint_chrome's pressed_box convention
+// (1 = close, 3 = maximize, 4 = minimize). Hatch is hit-tested but has no
+// pressed art until Window Menu is wired.
+enum ChromeBox : int {
+    ChromeNone = 0,
+    ChromeClose = 1,
+    ChromeHatch = 2,
+    ChromeMax = 3,
+    ChromeMin = 4,
+};
+
+inline int chrome_box_at(const ChromeLayout &lay, int x, int y) {
+    if (lay.close_box.contains(x, y)) return ChromeClose;
+    if (lay.hatch_box.contains(x, y)) return ChromeHatch;
+    if (lay.max_box.contains(x, y)) return ChromeMax;
+    if (lay.min_box.contains(x, y)) return ChromeMin;
+    return ChromeNone;
+}
+
+// Dialogs and most KDX tool windows hide maximize and the Window Menu hatch
+// until those features exist; callers still keep minimize + close.
+inline void chrome_dialog_boxes(ChromeLayout &lay) {
+    lay.max_box = {0, 0, 0, 0};
+    lay.hatch_box = {0, 0, 0, 0};
+}
+
+// Deferred title-bar drag so a double-click can minimize (Haxial) instead of
+// always starting SC_MOVE on the first down.
+struct TitleDrag {
+    bool armed = false;
+    int x0 = 0, y0 = 0;
+
+    void arm(int x, int y) {
+        armed = true;
+        x0 = x;
+        y0 = y;
+    }
+    void clear() { armed = false; }
+
+    // Returns true if a drag was started (caller should stop handling).
+    bool maybe_drag(HWND hwnd, int x, int y, LPARAM lp) {
+        if (!armed) return false;
+        if (abs(x - x0) > 3 || abs(y - y0) > 3) {
+            armed = false;
+            ReleaseCapture();
+            SendMessageA(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return true;
+        }
+        return false;
+    }
+};
+
 // A raised bar (menu bar / tab strip base), lit from the top.
 inline void raised_bar(Canvas &cv, Rect r,
                        const UiColors &uc = ui_colors(nullptr)) {
     cv.fill(r, uc.bar_body);
     cv.hline(r.x, r.right(), r.y, uc.bar_light);
     cv.hline(r.x, r.right(), r.bottom() - 2, uc.bar_dark);
-    cv.hline(r.x, r.right(), r.bottom() - 1, kBlack);
+    cv.hline(r.x, r.right(), r.bottom() - 1, uc.bar_dark);
 }

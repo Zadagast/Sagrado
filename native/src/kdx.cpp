@@ -14,11 +14,14 @@
 #include "canvas.h"
 #include "chrome.h"
 #include "controls.h"
+#include "dock.h"
 #include "kdx_art.h"
 #include "host_room.h"
 #include "menu.h"
 #include "room.h"
+#include "settings.h"
 #include "tracker.h"
+#include "winpos.h"
 
 namespace {
 
@@ -60,10 +63,66 @@ struct App {
     int pressed_btn = -1;
     int menu_btn = -1;  // command button holding its menu open
     int connections = 0, transfers = 0;
+    TitleDrag title_drag{};
 } g_app;
 
 HWND g_main = nullptr;
 HINSTANCE g_hinst = nullptr;
+
+dock::Icon dock_icon(const ArtImage &a) { return {a.w, a.h, a.px}; }
+
+void dock_minimize(HWND hwnd, const char *title, const ArtImage *art) {
+    dock::Icon ic{};
+    if (art) ic = dock_icon(*art);
+    dock::minimize(hwnd, title, ic, g_hinst);
+}
+
+// Hit a title-bar control. Sets pressed_box for close/min/max, or arms
+// title_drag for an empty title click. Returns true if the click was chrome.
+bool chrome_press(HWND hwnd, const ChromeLayout &lay, int &pressed_box,
+                  TitleDrag &title_drag, int x, int y) {
+    int box = chrome_box_at(lay, x, y);
+    if (box == ChromeClose || box == ChromeMin || box == ChromeMax) {
+        pressed_box = box;
+        SetCapture(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    }
+    if (box == ChromeHatch) return true;  // reserved: Window Menu
+    if (y < lay.title_h) {
+        title_drag.arm(x, y);
+        SetCapture(hwnd);
+        return true;
+    }
+    return false;
+}
+
+// Finish a chrome press. Invokes on_close / on_min when the release stays
+// on the same box. Returns true if a chrome press was in flight.
+bool chrome_release(ChromeLayout &lay, int &pressed_box, TitleDrag &title_drag,
+                    int x, int y, HWND hwnd, void (*on_close)(HWND),
+                    void (*on_min)(HWND)) {
+    bool had_title = title_drag.armed;
+    title_drag.clear();
+    if (pressed_box) {
+        int was = pressed_box;
+        pressed_box = 0;
+        ReleaseCapture();
+        if (chrome_box_at(lay, x, y) == was) {
+            if (was == ChromeClose && on_close) on_close(hwnd);
+            else if (was == ChromeMin && on_min) on_min(hwnd);
+            else InvalidateRect(hwnd, nullptr, FALSE);
+        } else {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return true;
+    }
+    if (had_title) {
+        ReleaseCapture();
+        return true;
+    }
+    return false;
+}
 
 // --- Tracker window ------------------------------------------------------
 // Modeled on the real KDX tracker: a groups table on top, the selected
@@ -77,26 +136,15 @@ constexpr int kTrkW = 900, kTrkH = 600;
 constexpr int kPaneInset = 8;  // window margin + the pane's focus ring
 constexpr int kRowH = 18, kHdrH = 18, kSbW = 13, kArrowLen = 15;
 
-// Measured off the real KDX tracker window.
-const Color kListBg{68, 68, 68};     // List Background
-const Color kSortBg{51, 51, 51};     // Sort Column Background
-const Color kRowLine{102, 102, 102}; // 1px separator above each row
-const Color kSelFill{102, 0, 0};     // selected row band
-const Color kPlate{51, 51, 51};      // header / scrollbar plate face
-const Color kPlateHi{102, 102, 102};
-const Color kPlateLo{34, 34, 34};
-const Color kGlyph{136, 136, 136};   // scrollbar arrows
-const Color kFocusBorder{136, 0, 0}; // focused pane ring
-const Color kIdleBorder{17, 17, 17};
-
 // The raised plate used by header cells, scroll arrows and the thumb.
-inline void plate(Canvas &cv, Rect b) {
-    cv.fill(b, kPlate);
-    cv.frame(b, kBlack);
-    cv.hline(b.x + 1, b.right() - 1, b.y + 1, kPlateHi);
-    cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, kPlateHi);
-    cv.hline(b.x + 1, b.right() - 1, b.bottom() - 2, kPlateLo);
-    cv.vline(b.right() - 2, b.y + 1, b.bottom() - 1, kPlateLo);
+inline void plate(Canvas &cv, Rect b, Color face, Color hi, Color lo,
+                  Color frame) {
+    cv.fill(b, face);
+    cv.frame(b, frame);
+    cv.hline(b.x + 1, b.right() - 1, b.y + 1, hi);
+    cv.vline(b.x + 1, b.y + 1, b.bottom() - 1, hi);
+    cv.hline(b.x + 1, b.right() - 1, b.bottom() - 2, lo);
+    cv.vline(b.right() - 2, b.y + 1, b.bottom() - 1, lo);
 }
 
 // A KDX scrollbar: an arrow pair at each end, a draggable thumb between.
@@ -118,17 +166,39 @@ struct ScrollBar {
     void layout() {
         set(value);
         int len = vertical ? r.h : r.w;
-        int a = kArrowLen;
-        if (len < a * 5) a = len / 5;
+        const Theme *theme = kit_theme();
+        const ThemeImage *bar =
+            theme ? theme->image(vertical ? SlotVScrollDoubleArrows
+                                          : SlotHScrollDoubleArrows)
+                  : nullptr;
+        int a0 = 0, a1 = 0;  // leading / trailing arrow-pair zone
+        if (bar) {
+            if (vertical) {
+                a0 = bar->positions[1] > 0 ? bar->positions[1] : bar->caps[1];
+                a1 = bar->positions[3] > 0 ? bar->positions[3] : bar->caps[3];
+            } else {
+                a0 = bar->positions[0] > 0 ? bar->positions[0] : bar->caps[0];
+                a1 = bar->positions[2] > 0 ? bar->positions[2] : bar->caps[2];
+            }
+        }
+        if (a0 < 8) a0 = kArrowLen * 2;
+        if (a1 < 8) a1 = kArrowLen * 2;
+        if (len < a0 + a1 + 16) {
+            a0 = len / 5;
+            a1 = len / 5;
+            if (a0 < 4) a0 = 4;
+            if (a1 < 4) a1 = 4;
+        }
+        int half0 = a0 / 2, half1 = a1 / 2;
         auto box = [&](int off, int size) {
             return vertical ? Rect{r.x, r.y + off, r.w, size}
                             : Rect{r.x + off, r.y, size, r.h};
         };
-        dec_a = box(0, a);
-        inc_a = box(a, a);
-        dec_b = box(len - 2 * a, a);
-        inc_b = box(len - a, a);
-        int t0 = 2 * a, tlen = len - 4 * a;
+        dec_a = box(0, half0);
+        inc_a = box(half0, a0 - half0);
+        dec_b = box(len - a1, half1);
+        inc_b = box(len - a1 + half1, a1 - half1);
+        int t0 = a0, tlen = len - a0 - a1;
         if (tlen < 0) tlen = 0;
         track = box(t0, tlen);
         int span = vertical ? track.h : track.w;
@@ -140,31 +210,63 @@ struct ScrollBar {
     }
 
     void paint(Canvas &cv) const {
-        cv.fill(r, kPlate);
-        cv.frame(r, kBlack);
-        auto arrow = [&](Rect b, bool back) {
-            plate(cv, b);
-            int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+        const Theme *theme = kit_theme();
+        ScrollColors sc = scroll_colors(theme);
+        const ThemeImage *bar =
+            theme ? theme->image(vertical ? SlotVScrollDoubleArrows
+                                          : SlotHScrollDoubleArrows)
+                  : nullptr;
+        const ThemeImage *ind =
+            theme ? theme->image(vertical ? SlotVScrollIndicatorNormal
+                                          : SlotHScrollIndicatorNormal)
+                  : nullptr;
+        const ThemeImage *grips =
+            theme ? theme->image(vertical ? SlotVScrollGripsNormal
+                                          : SlotHScrollGripsNormal)
+                  : nullptr;
+
+        if (bar) {
+            cv.nine_slice(*bar, r);
+        } else {
+            cv.fill(r, sc.track);
+            cv.frame(r, sc.frame);
+            cv.hline(r.x + 1, r.right() - 1, r.y + 1, sc.track_l1);
+            cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, sc.track_l1);
+            cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, sc.track_d1);
+            cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, sc.track_d1);
+            auto arrow = [&](Rect b, bool back) {
+                plate(cv, b, sc.face, sc.light, sc.dark, sc.frame);
+                int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+                for (int i = 0; i < 4; ++i) {
+                    int t = back ? i : 3 - i;
+                    if (vertical)
+                        cv.hline(cx - t, cx + t + 1, cy - 2 + i, sc.label);
+                    else
+                        cv.vline(cx - 2 + i, cy - t, cy + t + 1, sc.label);
+                }
+            };
+            arrow(dec_a, true);
+            arrow(inc_a, false);
+            arrow(dec_b, true);
+            arrow(inc_b, false);
+        }
+
+        if (ind) {
+            cv.nine_slice(*ind, thumb);
+        } else {
+            plate(cv, thumb, sc.thumb, sc.thumb_l, sc.thumb_d, sc.frame);
+            int cx = thumb.x + thumb.w / 2, cy = thumb.y + thumb.h / 2;
             for (int i = 0; i < 4; ++i) {
-                int t = back ? i : 3 - i;
-                if (vertical)
-                    cv.hline(cx - t, cx + t + 1, cy - 2 + i, kGlyph);
-                else
-                    cv.vline(cx - 2 + i, cy - t, cy + t + 1, kGlyph);
+                if (vertical && thumb.h > 24)
+                    cv.hline(cx - 4, cx + 4, cy - 4 + i * 2, sc.thumb_l);
+                else if (!vertical && thumb.w > 24)
+                    cv.vline(cx - 4 + i * 2, cy - 4, cy + 4, sc.thumb_l);
             }
-        };
-        arrow(dec_a, true);
-        arrow(inc_a, false);
-        arrow(dec_b, true);
-        arrow(inc_b, false);
-        plate(cv, thumb);
-        // Grip: four short lines at the thumb's center.
-        int cx = thumb.x + thumb.w / 2, cy = thumb.y + thumb.h / 2;
-        for (int i = 0; i < 4; ++i) {
-            if (vertical && thumb.h > 24)
-                cv.hline(cx - 4, cx + 4, cy - 4 + i * 2, kPlateHi);
-            else if (!vertical && thumb.w > 24)
-                cv.vline(cx - 4 + i * 2, cy - 4, cy + 4, kPlateHi);
+        }
+        if (grips && grips->w > 0 && grips->h > 0) {
+            int gx = thumb.x + (thumb.w - grips->w) / 2;
+            int gy = thumb.y + (thumb.h - grips->h) / 2;
+            if (gx >= thumb.x && gy >= thumb.y) cv.blit_image(*grips, gx, gy);
         }
     }
 
@@ -243,38 +345,57 @@ struct ListPane {
 
 void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
                 bool focused) {
-    // Focus ring: red around the active pane, near-black otherwise.
+    const Theme *theme = kit_theme();
+    ListColors lc = list_colors(theme);
+    HeaderColors hc = header_colors(theme);
+
+    // Focus ring: Focus Box around the active pane, Primary Frame otherwise.
     Rect ring{p.r.x - 3, p.r.y - 3, p.r.w + 6, p.r.h + 6};
-    Color rc = focused ? kFocusBorder : kIdleBorder;
+    Color rc = focused ? lc.focus_ring : lc.idle_ring;
     cv.fill({ring.x, ring.y, ring.w, 2}, rc);
     cv.fill({ring.x, ring.bottom() - 2, ring.w, 2}, rc);
     cv.fill({ring.x, ring.y, 2, ring.h}, rc);
     cv.fill({ring.right() - 2, ring.y, 2, ring.h}, rc);
-    cv.frame({ring.x + 2, ring.y + 2, ring.w - 4, ring.h - 4}, kBlack);
+    cv.frame({ring.x + 2, ring.y + 2, ring.w - 4, ring.h - 4}, hc.frame);
 
-    // Header: a raised plate per column, white labels.
+    // Header: Column Header art when present, colour plates otherwise.
     cv.set_clip(p.header);
-    cv.fill(p.header, kPlate);
+    cv.fill(p.header, hc.face);
+    const ThemeImage *hdr_n =
+        theme ? theme->image(SlotColumnHeaderNormal) : nullptr;
+    const ThemeImage *hdr_h =
+        theme ? theme->image(SlotColumnHeaderHilited) : nullptr;
     int x = p.header.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
-        plate(cv, {x, p.header.y, cols[i].w + 1, p.header.h});
+        Rect cell{x, p.header.y, cols[i].w + 1, p.header.h};
+        const ThemeImage *art =
+            (i == p.sort_col && hdr_h) ? hdr_h : hdr_n;
+        if (art) {
+            cv.nine_slice(*art, cell);
+        } else if (i == p.sort_col) {
+            plate(cv, cell, hc.hilite, hc.hilite_light, hc.hilite_dark,
+                  hc.frame);
+        } else {
+            plate(cv, cell, hc.face, hc.light, hc.dark, hc.frame);
+        }
+        Color ink = (i == p.sort_col) ? hc.hilite_label : hc.label;
         cv.text(x + 6, p.header.y + (p.header.h - kFontHeight) / 2 + 1,
-                cols[i].title, kWhite);
+                cols[i].title, ink);
         x += cols[i].w;
     }
     cv.clear_clip();
 
-    // Body: list background, the sorted column tinted, row separators.
+    // Body: List Background, sort column tint, List Separator rows.
     cv.set_clip(p.body);
-    cv.fill(p.body, kListBg);
+    cv.fill(p.body, lc.bg);
     x = p.body.x - p.hsb.value;
     for (int i = 0; i < ncols; ++i) {
         if (i == p.sort_col)
-            cv.fill({x, p.body.y, cols[i].w, p.body.h}, kSortBg);
+            cv.fill({x, p.body.y, cols[i].w, p.body.h}, lc.sort_bg);
         x += cols[i].w;
     }
     for (int y = p.body.y; y < p.body.bottom(); y += kRowH)
-        cv.hline(p.body.x, p.body.right(), y, kRowLine);
+        cv.hline(p.body.x, p.body.right(), y, lc.separator);
     cv.clear_clip();
 
     p.vsb.paint(cv);
@@ -282,9 +403,9 @@ void paint_pane(Canvas &cv, ListPane &p, const Column *cols, int ncols,
 }
 
 void draw_cell(Canvas &cv, int x, int w, int y, const char *text,
-               bool right_align) {
+               bool right_align, Color ink) {
     int tx = right_align ? x + w - 8 - cv.text_width(text) : x + 6;
-    cv.text(tx, y, text, kWhite);
+    cv.text(tx, y, text, ink);
 }
 
 const Column kGroupCols[] = {
@@ -320,6 +441,7 @@ struct TrackerWnd {
     ListPane groups, servers;
     ScrollBar *drag = nullptr;
     int drag_grab = 0;
+    TitleDrag title_drag{};
 } g_tracker;
 
 int servers_in_group(const char *g) {
@@ -374,14 +496,16 @@ void paint_tracker() {
     bool focused = GetForegroundWindow() == g_tracker.hwnd;
     g_tracker.focused = focused;
 
-    ChromeLayout lay = chrome_layout(w, h, nullptr, focused);
-    lay.max_box = {0, 0, 0, 0};
+    ChromeLayout lay = chrome_layout(w, h, settings::active_theme(), focused);
+    chrome_dialog_boxes(lay);
     g_tracker.lay = lay;
     paint_chrome(cv, lay, "Tracker: Sagrado Tracker", focused, 0,
-                 g_tracker.pressed_box == 5 ? 1 : 0, nullptr);
+                 g_tracker.pressed_box, settings::active_theme());
 
     Rect cl = lay.client;
-    cv.fill(cl, Color{51, 51, 51});
+    DialogColors dc = dialog_colors(settings::active_theme());
+    ListColors lc = list_colors(settings::active_theme());
+    cv.fill(cl, dc.workspace);
 
     ListPane &gp = g_tracker.groups;
     ListPane &sp = g_tracker.servers;
@@ -398,14 +522,16 @@ void paint_tracker() {
     for (int i = gp.vsb.value;
          i < kGroupCount && gp.row_rect(i).y < gp.body.bottom(); ++i) {
         Rect row = gp.row_rect(i);
-        if (i == g_tracker.sel_group)
-            cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
+        bool sel = (i == g_tracker.sel_group);
+        if (sel) cv.fill({row.x, row.y + 1, row.w, row.h - 1}, lc.hilite_bg);
+        Color ink = sel ? lc.hilite_fg : lc.label;
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
         wsprintfA(cnt, "%d", servers_in_group(kGroupNames[i]));
-        draw_cell(cv, gp.col_x(kGroupCols, 0), kGroupCols[0].w, ty, cnt, true);
+        draw_cell(cv, gp.col_x(kGroupCols, 0), kGroupCols[0].w, ty, cnt, true,
+                  ink);
         draw_cell(cv, gp.col_x(kGroupCols, 1), kGroupCols[1].w, ty,
-                  kGroupNames[i], false);
+                  kGroupNames[i], false, ink);
     }
     cv.clear_clip();
 
@@ -426,19 +552,20 @@ void paint_tracker() {
          ++i) {
         const tracker::Room &s2 = g_tracker.dir.rooms[idx[i]];
         Rect row = sp.row_rect(i);
-        if (idx[i] == g_tracker.sel_server)
-            cv.fill({row.x, row.y + 1, row.w, row.h - 1}, kSelFill);
+        bool sel = (idx[i] == g_tracker.sel_server);
+        if (sel) cv.fill({row.x, row.y + 1, row.w, row.h - 1}, lc.hilite_bg);
+        Color ink = sel ? lc.hilite_fg : lc.label;
         int ty = row.y + (kRowH - kFontHeight) / 2 + 1;
         char cnt[16];
         wsprintfA(cnt, "%d", s2.users);
         draw_cell(cv, sp.col_x(kServerCols, 0), kServerCols[0].w, ty,
-                  s2.name.c_str(), false);
+                  s2.name.c_str(), false, ink);
         draw_cell(cv, sp.col_x(kServerCols, 1), kServerCols[1].w, ty, cnt,
-                  true);
+                  true, ink);
         draw_cell(cv, sp.col_x(kServerCols, 2), kServerCols[2].w, ty,
-                  s2.date.c_str(), false);
+                  s2.date.c_str(), false, ink);
         draw_cell(cv, sp.col_x(kServerCols, 3), kServerCols[3].w, ty,
-                  s2.description.c_str(), false);
+                  s2.description.c_str(), false, ink);
     }
     // While the directory is in flight (or unreachable) the list says so,
     // exactly where the rows would be.
@@ -454,16 +581,20 @@ void paint_tracker() {
             case tracker::Ready: msg = "No servers in this group."; break;
             default: msg = "";
         }
+        ScrollColors sc = scroll_colors(settings::active_theme());
         cv.text(sp.body.x + 6, sp.body.y + (kRowH - kFontHeight) / 2 + 1, msg,
-                kGlyph);
+                sc.label);
     }
     cv.clear_clip();
-    paint_grip(cv, lay.grip, focused, nullptr);
+    paint_grip(cv, lay.grip, focused, settings::active_theme());
 }
 
 void blit_canvas(HDC hdc, const Canvas &cv);
 void start_session(room::Role role, const std::string &id,
                    const std::string &token, const std::string &name);
+void disconnect_server();
+void open_chat();
+void open_settings(HINSTANCE hinst);
 
 // Join whatever the server list has selected.
 void join_selected() {
@@ -475,6 +606,10 @@ void join_selected() {
 }
 
 LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto min_tracker = [](HWND h) {
+        dock_minimize(h, "Tracker: Sagrado Tracker", &kIcConnect);
+    };
+    auto close_tracker = [](HWND h) { DestroyWindow(h); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -483,16 +618,9 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g_tracker.lay.close_box.contains(x, y)) {
-                g_tracker.pressed_box = 5;
-                SetCapture(hwnd);
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_press(hwnd, g_tracker.lay, g_tracker.pressed_box,
+                             g_tracker.title_drag, x, y))
                 return 0;
-            }
-            if (g_tracker.lay.min_box.contains(x, y)) {
-                CloseWindow(hwnd);
-                return 0;
-            }
             ScrollBar *bars[] = {&g_tracker.groups.vsb, &g_tracker.groups.hsb,
                                  &g_tracker.servers.vsb,
                                  &g_tracker.servers.hsb};
@@ -531,10 +659,22 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (g_tracker.lay.grip.contains(x, y))
                 SendMessage(hwnd, WM_SYSCOMMAND, SC_SIZE + 8, lp);
-            else if (y < g_tracker.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
             return 0;
         }
+        case WM_MOUSEMOVE:
+            if (g_tracker.title_drag.armed) {
+                g_tracker.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                                GET_Y_LPARAM(lp), lp);
+                return 0;
+            }
+            if (g_tracker.drag) {
+                g_tracker.drag->drag_to(
+                    (g_tracker.drag->vertical ? GET_Y_LPARAM(lp)
+                                              : GET_X_LPARAM(lp)) -
+                    g_tracker.drag_grab);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
         case WM_SIZE:
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -549,14 +689,6 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_TIMER:
             refresh_tracker();
-            return 0;
-        case WM_MOUSEMOVE:
-            if (g_tracker.drag) {
-                int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-                g_tracker.drag->drag_to(
-                    (g_tracker.drag->vertical ? y : x) - g_tracker.drag_grab);
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
             return 0;
         case WM_MOUSEWHEEL: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -575,22 +707,22 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_tracker.drag = nullptr;
                 return 0;
             }
-            if (g_tracker.pressed_box == 5) {
-                ReleaseCapture();
-                g_tracker.pressed_box = 0;
-                if (g_tracker.lay.close_box.contains(GET_X_LPARAM(lp),
-                                                     GET_Y_LPARAM(lp))) {
-                    DestroyWindow(hwnd);
-                    return 0;
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_release(g_tracker.lay, g_tracker.pressed_box,
+                               g_tracker.title_drag, GET_X_LPARAM(lp),
+                               GET_Y_LPARAM(lp), hwnd, close_tracker,
+                               min_tracker))
+                return 0;
+            return 0;
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g_tracker.lay.title_h &&
+                chrome_box_at(g_tracker.lay, x, y) == ChromeNone) {
+                min_tracker(hwnd);
+                return 0;
             }
+            if (g_tracker.servers.body.contains(x, y)) join_selected();
             return 0;
-        case WM_LBUTTONDBLCLK:
-            if (g_tracker.servers.body.contains(GET_X_LPARAM(lp),
-                                                GET_Y_LPARAM(lp)))
-                join_selected();
-            return 0;
+        }
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) DestroyWindow(hwnd);
             if (wp == VK_F5) refresh_tracker();
@@ -611,7 +743,12 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "tracker", true);
+            return 0;
         case WM_DESTROY:
+            winpos::remember(hwnd, "tracker", true);
+            dock::forget(hwnd);
             g_tracker.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
             return 0;
@@ -621,7 +758,7 @@ LRESULT CALLBACK tracker_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 void open_tracker(HINSTANCE hinst) {
     if (g_tracker.hwnd) {
-        SetForegroundWindow(g_tracker.hwnd);
+        dock::restore_hwnd(g_tracker.hwnd);
         return;
     }
     static bool registered = false;
@@ -638,9 +775,10 @@ void open_tracker(HINSTANCE hinst) {
     }
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    g_tracker.hwnd = CreateWindowExA(0, "SagradoTracker", "Tracker", WS_POPUP,
-                                     mr.right + 12, mr.top, kTrkW, kTrkH,
-                                     g_main, nullptr, hinst, nullptr);
+    int x = mr.right + 12, y = mr.top, w = kTrkW, h = kTrkH;
+    winpos::resolve("tracker", x, y, w, h, true);
+    g_tracker.hwnd = CreateWindowExA(0, "SagradoTracker", "Tracker", WS_POPUP, x,
+                                     y, w, h, g_main, nullptr, hinst, nullptr);
     ShowWindow(g_tracker.hwnd, SW_SHOW);
     SetForegroundWindow(g_tracker.hwnd);
     refresh_tracker();
@@ -654,6 +792,10 @@ void start_session(room::Role role, const std::string &id,
 
 LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     host_room::Window &g = host_room::g;
+    auto min_host = [](HWND h) {
+        dock_minimize(h, "Host a Server", &kIcCommands);
+    };
+    auto close_host = [](HWND h) { DestroyWindow(h); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -662,10 +804,8 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g.lay.close_box.contains(x, y)) {
-                DestroyWindow(hwnd);
+            if (chrome_press(hwnd, g.lay, g.pressed_box, g.title_drag, x, y))
                 return 0;
-            }
             for (int i = 0; i < 2; ++i)
                 if (g.field[i].contains(x, y)) {
                     g.focus = i;
@@ -683,12 +823,24 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 return 0;
             }
-            if (y < g.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
             return 0;
         }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g.lay.title_h && chrome_box_at(g.lay, x, y) == ChromeNone)
+                min_host(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (g.title_drag.armed)
+                g.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                        GET_Y_LPARAM(lp), lp);
+            return 0;
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (chrome_release(g.lay, g.pressed_box, g.title_drag, x, y, hwnd,
+                               close_host, min_host))
+                return 0;
             if (g.pressed_btn >= 0) {
                 ReleaseCapture();
                 int was = g.pressed_btn;
@@ -696,7 +848,7 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 InvalidateRect(hwnd, nullptr, FALSE);
                 if (was == 0 && g.action.contains(x, y)) {
                     if (g.hosting.active)
-                        host_room::stop_hosting();
+                        disconnect_server();
                     else
                         host_room::start_hosting();
                 } else if (was == 1 && g.close.contains(x, y)) {
@@ -758,8 +910,13 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "host", false);
+            return 0;
         case WM_DESTROY:
             // Hosting outlives the window; the launcher keeps the heartbeat.
+            winpos::remember(hwnd, "host", false);
+            dock::forget(hwnd);
             g.hwnd = nullptr;
             if (g_main) SetForegroundWindow(g_main);
             return 0;
@@ -770,12 +927,13 @@ LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 void open_host_room(HINSTANCE hinst) {
     host_room::Window &g = host_room::g;
     if (g.hwnd) {
-        SetForegroundWindow(g.hwnd);
+        dock::restore_hwnd(g.hwnd);
         return;
     }
     static bool registered = false;
     if (!registered) {
         WNDCLASSA wc{};
+        wc.style = CS_DBLCLKS;
         wc.lpfnWndProc = host_proc;
         wc.hInstance = hinst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -785,12 +943,273 @@ void open_host_room(HINSTANCE hinst) {
     }
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    g.hwnd = CreateWindowExA(0, "SagradoHostRoom", "Host a Server", WS_POPUP,
-                             mr.right + 12, mr.top + 40, host_room::kW,
-                             host_room::kH, g_main, nullptr, hinst, nullptr);
+    int x = mr.right + 12, y = mr.top + 40, w = host_room::kW, h = host_room::kH;
+    winpos::resolve("host", x, y, w, h, false);
+    g.hwnd = CreateWindowExA(0, "SagradoHostRoom", "Host a Server", WS_POPUP, x,
+                             y, w, h, g_main, nullptr, hinst, nullptr);
     ShowWindow(g.hwnd, SW_SHOW);
     SetForegroundWindow(g.hwnd);
     SetTimer(g.hwnd, 1, 500, nullptr);  // caret blink
+}
+
+// ---- Settings window ----
+// Identity + Appearance pages matching the real Haxial KDX Settings dialog.
+
+void invalidate_all_windows() {
+    auto bump = [](HWND w) {
+        if (!w) return;
+        InvalidateRect(w, nullptr, FALSE);
+        UpdateWindow(w);
+    };
+    bump(g_main);
+    bump(g_tracker.hwnd);
+    bump(host_room::g.hwnd);
+    bump(settings::g.hwnd);
+    bump(FindWindowA("SagradoServer", nullptr));
+    bump(dock::g.hwnd);
+}
+
+LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    settings::Window &g = settings::g;
+    auto min_settings = [](HWND h) {
+        dock_minimize(h, "Settings", &kIcSettings);
+    };
+    auto close_settings = [](HWND) { settings::cancel_and_close(); };
+    switch (msg) {
+        case WM_NCCALCSIZE:
+            if (wp) return 0;
+            break;
+        case WM_NCHITTEST:
+            return HTCLIENT;
+        case WM_LBUTTONDOWN: {
+            settings::close_picker();
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            settings::layout(rc.right, rc.bottom);
+            if (chrome_press(hwnd, g.lay, g.pressed_box, g.title_drag, x, y))
+                return 0;
+            auto press = [&](int id, Rect r) {
+                if (!r.contains(x, y)) return false;
+                g.pressed_btn = id;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return true;
+            };
+            if (press(0, g.cat) || press(1, g.cancel) || press(2, g.apply) ||
+                press(3, g.save))
+                return 0;
+            if (settings::g_page == settings::PageIdentity) {
+                if (g.name.contains(x, y)) {
+                    g.focus = settings::FocusName;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (g.desc.contains(x, y)) {
+                    g.focus = settings::FocusDesc;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (press(4, g.fg_sw) || press(5, g.bg_sw)) return 0;
+            } else {
+                if (press(4, g.appearance)) return 0;
+                auto hit_chk = [&](Rect r) {
+                    return x >= r.x && x < r.x + 200 && y >= r.y &&
+                           y < r.y + 16;
+                };
+                if (hit_chk(g.chk_file)) {
+                    settings::g_draft.small_file_icons =
+                        !settings::g_draft.small_file_icons;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (hit_chk(g.chk_user)) {
+                    settings::g_draft.small_user_icons =
+                        !settings::g_draft.small_user_icons;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (hit_chk(g.chk_bar)) {
+                    settings::g_draft.small_button_bar =
+                        !settings::g_draft.small_button_bar;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (press(5, g.font_title) || press(6, g.font_chat) ||
+                    press(7, g.font_files) || press(8, g.font_users))
+                    return 0;
+            }
+            return 0;
+        }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g.lay.title_h && chrome_box_at(g.lay, x, y) == ChromeNone)
+                min_settings(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (g.title_drag.armed)
+                g.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                        GET_Y_LPARAM(lp), lp);
+            return 0;
+        case WM_LBUTTONUP: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (chrome_release(g.lay, g.pressed_box, g.title_drag, x, y, hwnd,
+                               close_settings, min_settings))
+                return 0;
+            if (g.pressed_btn >= 0) {
+                ReleaseCapture();
+                int was = g.pressed_btn;
+                g.pressed_btn = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                auto at = [&](Rect r) { return r.contains(x, y); };
+                if (was == 0 && at(g.cat))
+                    settings::open_category_menu(g_hinst);
+                else if (was == 1 && at(g.cancel))
+                    settings::cancel_and_close();
+                else if (was == 2 && at(g.apply))
+                    settings::apply_draft(false);
+                else if (was == 3 && at(g.save)) {
+                    settings::apply_draft(true);
+                    if (g.hwnd) DestroyWindow(g.hwnd);
+                } else if (settings::g_page == settings::PageIdentity) {
+                    if (was == 4 && at(g.fg_sw)) {
+                        g.color_target = 0;
+                        POINT p{g.fg_sw.x, g.fg_sw.bottom()};
+                        ClientToScreen(hwnd, &p);
+                        settings::open_picker(g_hinst, p.x, p.y, 1);
+                    } else if (was == 5 && at(g.bg_sw)) {
+                        g.color_target = 1;
+                        POINT p{g.bg_sw.x, g.bg_sw.bottom()};
+                        ClientToScreen(hwnd, &p);
+                        settings::open_picker(g_hinst, p.x, p.y, 1);
+                    }
+                } else if (settings::g_page == settings::PageAppearance) {
+                    if (was == 4 && at(g.appearance)) {
+                        POINT p{g.appearance.x, g.appearance.bottom()};
+                        ClientToScreen(hwnd, &p);
+                        settings::open_picker(g_hinst, p.x, p.y, 0);
+                    } else if (was >= 5 && was <= 8) {
+                        MessageBoxA(hwnd,
+                                    "Font selection will land with a later "
+                                    "pass — Sagrado currently uses its built-in "
+                                    "pixel font.",
+                                    "KDX Settings", MB_OK);
+                    }
+                }
+            }
+            return 0;
+        }
+        case settings::WM_SETTINGS_PICK: {
+            int kind = int(wp), idx = int(lp);
+            if (kind == 0) {
+                if (idx <= 0)
+                    settings::g_draft.theme_name = "Haxial Standard";
+                else if (idx <= int(settings::g_theme.hap_names.size()))
+                    settings::g_draft.theme_name =
+                        settings::g_theme.hap_names[idx - 1];
+                settings::preview_draft_theme();
+            } else if (kind == 1 && idx >= 0 &&
+                       idx < int(settings::g_pick.colors.size())) {
+                uint32_t c = settings::g_pick.colors[idx];
+                if (g.color_target == 0)
+                    settings::g_draft.fg = c;
+                else
+                    settings::g_draft.bg = c;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+        case WM_CHAR: {
+            char c = char(wp);
+            std::string *t = g.focus == settings::FocusDesc
+                                 ? &settings::g_draft.description
+                                 : &settings::g_draft.nick;
+            if (c == '\b') {
+                if (!t->empty()) t->pop_back();
+            } else if (c == '\t') {
+                g.focus = g.focus == settings::FocusName ? settings::FocusDesc
+                                                         : settings::FocusName;
+            } else if (c == '\r') {
+                if (g.focus == settings::FocusDesc) *t += '\n';
+            } else if (c >= 32 && c < 127 && t->size() < 200) {
+                *t += c;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (wp == VK_ESCAPE) settings::cancel_and_close();
+            return 0;
+        case WM_TIMER:
+            g.caret = !g.caret;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ACTIVATE:
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            settings::paint();
+            blit_canvas(hdc, g.canvas);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "settings", false);
+            return 0;
+        case WM_DESTROY:
+            winpos::remember(hwnd, "settings", false);
+            dock::forget(hwnd);
+            settings::close_picker();
+            // X / Esc go through cancel_and_close; if the window dies another
+            // way, still drop an uncommitted preview.
+            if (settings::g_draft.theme_name != settings::g_prefs.theme_name ||
+                settings::g_draft.nick != settings::g_prefs.nick ||
+                settings::g_draft.fg != settings::g_prefs.fg ||
+                settings::g_draft.bg != settings::g_prefs.bg)
+                settings::discard_unapplied();
+            g.hwnd = nullptr;
+            if (g_main) SetForegroundWindow(g_main);
+            return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+void open_settings(HINSTANCE hinst) {
+    settings::Window &g = settings::g;
+    if (g.hwnd) {
+        dock::restore_hwnd(g.hwnd);
+        return;
+    }
+    settings::g_draft = settings::g_prefs;
+    settings::g_page = settings::PageIdentity;
+    settings::invalidate_all = invalidate_all_windows;
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSA wc{};
+        wc.style = CS_DBLCLKS;
+        wc.lpfnWndProc = settings_proc;
+        wc.hInstance = hinst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = "SagradoSettings";
+        RegisterClassA(&wc);
+        registered = true;
+    }
+    RECT mr{};
+    if (g_main) GetWindowRect(g_main, &mr);
+    int x = mr.right + 12, y = mr.top, w = settings::kW, h = settings::kH;
+    winpos::resolve("settings", x, y, w, h, false);
+    g.hwnd = CreateWindowExA(0, "SagradoSettings", "KDX Settings", WS_POPUP, x, y,
+                             w, h, g_main, nullptr, hinst, nullptr);
+    ShowWindow(g.hwnd, SW_SHOW);
+    SetForegroundWindow(g.hwnd);
+    SetTimer(g.hwnd, 1, 500, nullptr);
 }
 
 // ---- Chat window ----
@@ -808,9 +1227,6 @@ constexpr int kToolH = 22;   // Chat List / room tab row
 constexpr int kEntryH = 40;  // the message box
 constexpr int kTopicH = 20;
 
-const Color kChatBg{0, 0, 0};
-const Color kTabActive{136, 0, 0};
-
 struct ServerWin {
     HWND hwnd = nullptr;
     Canvas canvas;
@@ -824,6 +1240,7 @@ struct ServerWin {
     ScrollBar *drag = nullptr;
     int drag_grab = 0;
     bool follow = true;  // stay pinned to the newest line
+    TitleDrag title_drag{};
 } g_server;
 
 struct ChatLine {
@@ -831,14 +1248,16 @@ struct ChatLine {
     Color fg;
 };
 
-// A sunken pane: black edge, dark face, the bevel the kit uses everywhere.
-void sunken(Canvas &cv, Rect r, Color face) {
+// A sunken pane: Primary Frame + Light/Dark bevel around a face fill.
+void sunken(Canvas &cv, Rect r, Color face, const Theme *theme) {
     cv.fill(r, face);
-    cv.frame(r, kBlack);
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kPlateLo);
-    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, kPlateLo);
-    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, kPlateHi);
-    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, kPlateHi);
+    cv.frame(r, primary_frame(theme));
+    Color lo = primary_dark(theme);
+    Color hi = primary_light(theme);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, lo);
+    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, lo);
+    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, hi);
+    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, hi);
 }
 
 // Program art carries the launcher's #333 panel behind it; treat that as
@@ -879,22 +1298,29 @@ std::vector<ChatLine> wrap_log(Canvas &cv, const std::vector<room::Line> &log,
     return out;
 }
 
-// The room's own tab: the same button shape held red, as KDX marks the chat
-// you are looking at.
+// The room's own tab: Column Header Hilite art/plate (Standard: held red).
 void draw_tab(Canvas &cv, Rect r, const char *label, bool pressed,
-              const DialogColors &dc) {
-    cv.fill(r, kTabActive);
-    rounded_frame(cv, r, dc.btn_frame, dc.workspace);
-    Color hi = pressed ? Color{68, 0, 0} : Color{204, 0, 0};
-    Color lo = pressed ? Color{204, 0, 0} : Color{68, 0, 0};
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, hi);
-    cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, hi);
-    cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, lo);
-    cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, lo);
+              const DialogColors &dc, const HeaderColors &hc) {
+    const Theme *theme = kit_theme();
+    const ThemeImage *art =
+        theme ? theme->image(SlotColumnHeaderHilited) : nullptr;
+    if (!art && theme) art = theme->image(SlotColumnHeaderNormal);
+    if (art) {
+        cv.nine_slice(*art, r);
+    } else {
+        cv.fill(r, hc.hilite);
+        rounded_frame(cv, r, dc.btn_frame, dc.workspace);
+        Color hi = pressed ? hc.hilite_dark : hc.hilite_light;
+        Color lo = pressed ? hc.hilite_light : hc.hilite_dark;
+        cv.hline(r.x + 1, r.right() - 1, r.y + 1, hi);
+        cv.vline(r.x + 1, r.y + 1, r.bottom() - 1, hi);
+        cv.hline(r.x + 1, r.right() - 1, r.bottom() - 2, lo);
+        cv.vline(r.right() - 2, r.y + 1, r.bottom() - 1, lo);
+    }
     int off = pressed ? 1 : 0;
     blit_icon(cv, kIcChat, r.x + 6 + off, r.y + (r.h - kIcChat.h) / 2 + off);
     cv.text(r.x + 26 + off, r.y + (r.h - kFontHeight) / 2 + off, label,
-            kWhite);
+            hc.hilite_label);
 }
 
 void paint_server() {
@@ -906,16 +1332,19 @@ void paint_server() {
     if (cv.width() != rc.right || cv.height() != rc.bottom)
         cv.resize(rc.right, rc.bottom);
     bool focused = GetForegroundWindow() == s.hwnd;
-    s.lay = chrome_layout(rc.right, rc.bottom, nullptr, focused);
-    s.lay.max_box = {0, 0, 0, 0};
+    s.lay = chrome_layout(rc.right, rc.bottom, settings::active_theme(), focused);
+    chrome_dialog_boxes(s.lay);
 
     std::string name = room::name_copy();
     if (name.empty()) name = "Sagrado Server";
     std::string title = "Chat: " + name;
-    paint_chrome(cv, s.lay, title.c_str(), focused, 0,
-                 s.pressed_box == 5 ? 1 : 0, nullptr);
+    paint_chrome(cv, s.lay, title.c_str(), focused, 0, s.pressed_box,
+                 settings::active_theme());
 
-    DialogColors dc = dialog_colors(nullptr);
+    DialogColors dc = dialog_colors(settings::active_theme());
+    HeaderColors hc = header_colors(settings::active_theme());
+    ListColors lc = list_colors(settings::active_theme());
+    const Theme *theme = settings::active_theme();
     Rect cl = s.lay.client;
     cv.fill(cl, dc.workspace);
 
@@ -932,7 +1361,7 @@ void paint_server() {
 
     draw_button(cv, s.chat_list_btn, "Chat List", s.pressed_btn == 0, false,
                 dc);
-    draw_tab(cv, s.room_tab, name.c_str(), s.pressed_btn == 1, dc);
+    draw_tab(cv, s.room_tab, name.c_str(), s.pressed_btn == 1, dc, hc);
 
     std::vector<room::Line> log = room::log_copy();
     std::vector<ChatLine> lines = wrap_log(cv, log, s.chat.w - kSbW - 10);
@@ -944,7 +1373,7 @@ void paint_server() {
     if (s.follow) s.chat_sb.value = s.chat_sb.max_value();
     s.chat_sb.layout();
 
-    sunken(cv, s.chat, kChatBg);
+    sunken(cv, s.chat, dc.field_bg, theme);
     cv.set_clip({s.chat.x + 2, s.chat.y + 2, s.chat.w - kSbW - 2,
                  s.chat.h - 4});
     for (int i = 0; i < rows; ++i) {
@@ -957,7 +1386,7 @@ void paint_server() {
     s.chat_sb.paint(cv);
 
     // Each user gets a row of their own colours, with their icon beside the
-    // name (one icon for everyone until Settings can set it).
+    // name (icon art comes from Settings later; one shared mark for now).
     std::vector<room::User> users = room::user_copy();
     int seats = (s.users.h - 4) / kUserRowH;
     s.user_sb.vertical = true;
@@ -966,7 +1395,7 @@ void paint_server() {
     s.user_sb.total = int(users.size());
     s.user_sb.layout();
 
-    sunken(cv, s.users, kChatBg);
+    sunken(cv, s.users, lc.bg, theme);
     Rect body{s.users.x + 2, s.users.y + 2, s.users.w - kSbW - 2,
               s.users.h - 4};
     cv.set_clip(body);
@@ -976,16 +1405,27 @@ void paint_server() {
         const room::User &u = users[idx];
         Rect row{body.x, body.y + i * kUserRowH, body.w, kUserRowH};
         cv.fill(row, from_u32(u.bg));
-        cv.hline(row.x, row.right(), row.bottom() - 1, kBarBody);
-        blit_icon(cv, kIcUsers, row.x + 4, row.y + (kUserRowH - kIcUsers.h) / 2);
-        cv.text(row.x + 26, row.y + (kUserRowH - kFontHeight) / 2,
-                u.nick.c_str(), from_u32(u.fg));
+        cv.hline(row.x, row.right(), row.bottom() - 1, lc.separator);
+        const ThemeImage *uic =
+            theme ? theme->icon16(IconUser16) : nullptr;
+        if (uic && uic->w > 0 && uic->h > 0) {
+            int iy = row.y + (kUserRowH - uic->h) / 2;
+            cv.blit_image(*uic, row.x + 4, iy);
+            cv.text(row.x + 4 + uic->w + 6,
+                    row.y + (kUserRowH - kFontHeight) / 2, u.nick.c_str(),
+                    from_u32(u.fg));
+        } else {
+            blit_icon(cv, kIcUsers, row.x + 4,
+                      row.y + (kUserRowH - kIcUsers.h) / 2);
+            cv.text(row.x + 26, row.y + (kUserRowH - kFontHeight) / 2,
+                    u.nick.c_str(), from_u32(u.fg));
+        }
     }
     cv.clear_clip();
     s.user_sb.paint(cv);
 
-    // The entry box: black, with the red focus outline the real one has.
-    cv.fill(s.entry, kChatBg);
+    // The entry box: Text Box + Focus Box outline when active.
+    cv.fill(s.entry, dc.field_bg);
     cv.frame(s.entry, focused ? dc.field_focus : dc.field_frame);
     int end = cv.text(s.entry.x + 5, s.entry.y + 4, s.draft.c_str(),
                       from_u32(room::g.me.fg));
@@ -1003,16 +1443,38 @@ void paint_server() {
                 dc.label);
         cv.clear_clip();
     }
-    paint_grip(cv, s.lay.grip, focused, nullptr);
+    paint_grip(cv, s.lay.grip, focused, settings::active_theme());
 }
 
-void close_session() {
+// Tear down the relay session and, if we were hosting, the tracker listing.
+// Closing the chat window must NOT call this — connection and chat UI are
+// separate; Chat can reopen onto the same session.
+void disconnect_server() {
     room::leave();
-    if (host_room::g.hosting.active) host_room::stop_hosting();
+    host_room::stop_hosting_async();
+    if (g_server.hwnd) DestroyWindow(g_server.hwnd);
+    g_app.connections = 0;
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+}
+
+void refresh_connection_count() {
+    if (!room::on_server()) {
+        g_app.connections = 0;
+        return;
+    }
+    g_app.connections = int(room::user_copy().size());
+    if (g_app.connections < 1) g_app.connections = 1;
 }
 
 LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     ServerWin &s = g_server;
+    auto min_chat = [](HWND h) {
+        std::string name = room::name_copy();
+        if (name.empty()) name = "Sagrado Server";
+        std::string title = "Chat: " + name;
+        dock_minimize(h, title.c_str(), &kIcChat);
+    };
+    auto close_chat = [](HWND h) { DestroyWindow(h); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -1021,16 +1483,8 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (s.lay.close_box.contains(x, y)) {
-                s.pressed_box = 5;
-                SetCapture(hwnd);
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_press(hwnd, s.lay, s.pressed_box, s.title_drag, x, y))
                 return 0;
-            }
-            if (s.lay.min_box.contains(x, y)) {
-                CloseWindow(hwnd);
-                return 0;
-            }
             int hit = s.chat_sb.on_press(x, y);
             if (hit) {
                 s.follow = s.chat_sb.value >= s.chat_sb.max_value();
@@ -1066,11 +1520,20 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (s.lay.grip.contains(x, y))
                 SendMessage(hwnd, WM_SYSCOMMAND, SC_SIZE + 8, lp);
-            else if (y < s.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
+            return 0;
+        }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < s.lay.title_h && chrome_box_at(s.lay, x, y) == ChromeNone)
+                min_chat(hwnd);
             return 0;
         }
         case WM_MOUSEMOVE:
+            if (s.title_drag.armed) {
+                s.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                        GET_Y_LPARAM(lp), lp);
+                return 0;
+            }
             if (s.drag) {
                 s.drag->drag_to(GET_Y_LPARAM(lp) - s.drag_grab);
                 if (s.drag == &s.chat_sb)
@@ -1084,16 +1547,10 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 s.drag = nullptr;
                 return 0;
             }
-            if (s.pressed_box == 5) {
-                ReleaseCapture();
-                s.pressed_box = 0;
-                if (s.lay.close_box.contains(GET_X_LPARAM(lp),
-                                             GET_Y_LPARAM(lp))) {
-                    DestroyWindow(hwnd);
-                    return 0;
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
-            }
+            if (chrome_release(s.lay, s.pressed_box, s.title_drag,
+                               GET_X_LPARAM(lp), GET_Y_LPARAM(lp), hwnd,
+                               close_chat, min_chat))
+                return 0;
             if (s.pressed_btn >= 0) {
                 ReleaseCapture();
                 s.pressed_btn = -1;
@@ -1132,6 +1589,10 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == VK_ESCAPE) DestroyWindow(hwnd);
             return 0;
         case room::WM_ROOM_EVENT:
+            refresh_connection_count();
+            if (g_main) InvalidateRect(g_main, nullptr, FALSE);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case WM_SIZE:
         case WM_ACTIVATE:
         case WM_SETFOCUS:
@@ -1152,8 +1613,15 @@ LRESULT CALLBACK server_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "chat", true);
+            return 0;
         case WM_DESTROY:
-            close_session();
+            // Chat UI only — stay on the server. Events retarget to the
+            // launcher until Chat is opened again.
+            winpos::remember(hwnd, "chat", true);
+            dock::forget(hwnd);
+            if (room::g.notify == hwnd) room::attach_notify(g_main);
             s.hwnd = nullptr;
             if (g_main) {
                 SetForegroundWindow(g_main);
@@ -1171,18 +1639,37 @@ void start_session(room::Role role, const std::string &id,
                    const std::string &token, const std::string &name) {
     HWND w = open_server_window(g_hinst);
     room::start(role, w, id, token, name);
+    refresh_connection_count();
+    if (g_main) InvalidateRect(g_main, nullptr, FALSE);
     InvalidateRect(w, nullptr, FALSE);
+}
+
+// Bring the public chat window forward. Connection lives in room:: — closing
+// this window does not leave the server. Offline, Chat opens Connect...
+void open_chat() {
+    if (g_server.hwnd) {
+        dock::restore_hwnd(g_server.hwnd);
+        return;
+    }
+    if (room::on_server() || host_room::g.hosting.active) {
+        HWND w = open_server_window(g_hinst);
+        room::attach_notify(w);
+        InvalidateRect(w, nullptr, FALSE);
+        return;
+    }
+    open_tracker(g_hinst);
 }
 
 HWND open_server_window(HINSTANCE hinst) {
     ServerWin &s = g_server;
     if (s.hwnd) {
-        SetForegroundWindow(s.hwnd);
+        dock::restore_hwnd(s.hwnd);
         return s.hwnd;
     }
     static bool registered = false;
     if (!registered) {
         WNDCLASSA wc{};
+        wc.style = CS_DBLCLKS;
         wc.lpfnWndProc = server_proc;
         wc.hInstance = hinst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -1194,9 +1681,10 @@ HWND open_server_window(HINSTANCE hinst) {
     s.follow = true;
     RECT mr{};
     if (g_main) GetWindowRect(g_main, &mr);
-    s.hwnd = CreateWindowExA(0, "SagradoServer", "Sagrado Server", WS_POPUP,
-                             mr.right + 12, mr.top, kSrvW, kSrvH, nullptr,
-                             nullptr, hinst, nullptr);
+    int x = mr.right + 12, y = mr.top, w = kSrvW, h = kSrvH;
+    winpos::resolve("chat", x, y, w, h, true);
+    s.hwnd = CreateWindowExA(0, "SagradoServer", "Sagrado Server", WS_POPUP, x, y,
+                             w, h, nullptr, nullptr, hinst, nullptr);
     ShowWindow(s.hwnd, SW_SHOW);
     SetForegroundWindow(s.hwnd);
     SetTimer(s.hwnd, 1, 500, nullptr);  // caret blink
@@ -1238,17 +1726,17 @@ void draw_command(Canvas &cv, int i, bool pressed, const DialogColors &dc) {
     if (kCommands[i].icon == &kIcMessages) blit_art(cv, kWonderLight, off, off);
 }
 
-// A command button while its menu is down: the red hilite face the real
-// client shows, lit from the top and shading toward the bottom.
+// A command button while its menu is down: Button Hilite face (Standard red).
 void draw_command_hilite(Canvas &cv, int i, const DialogColors &dc) {
     Rect r = command_rect(i);
-    cv.frame(r, dc.btn_frame);
-    cv.hline(r.x + 1, r.right() - 1, r.y + 1, kBright);
-    cv.hline(r.x + 1, r.right() - 1, r.y + 2, Color{170, 0, 0});
-    cv.vgradient({r.x + 1, r.y + 3, r.w - 2, r.h - 4}, Color{136, 0, 0},
-                 Color{85, 0, 0});
+    ButtonHiliteColors bh = button_hilite_colors(kit_theme());
+    cv.frame(r, bh.frame);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 1, bh.l2);
+    cv.hline(r.x + 1, r.right() - 1, r.y + 2, bh.l1);
+    cv.vgradient({r.x + 1, r.y + 3, r.w - 2, r.h - 4}, bh.face, bh.d2);
     blit_art(cv, *kCommands[i].icon);
-    cv.text(36, r.y + (r.h - kFontHeight) / 2, kCommands[i].label, kWhite);
+    cv.text(36, r.y + (r.h - kFontHeight) / 2, kCommands[i].label, bh.label);
+    (void)dc;
 }
 
 void repaint(HWND hwnd) {
@@ -1258,28 +1746,34 @@ void repaint(HWND hwnd) {
     if (w <= 0 || h <= 0) return;
     Canvas &cv = g_app.canvas;
     if (cv.width() != w || cv.height() != h) cv.resize(w, h);
-    g_app.lay = chrome_layout(w, h, nullptr, g_app.focused);
+    g_app.lay = chrome_layout(w, h, settings::active_theme(), g_app.focused);
     g_app.lay.grip = {0, 0, 0, 0};      // fixed-size launcher: no grow box
     g_app.lay.close_box = {0, 0, 0, 0}; // real KDX main window shows only
     g_app.lay.hatch_box = {0, 0, 0, 0}; // the minimize box; Exit quits
     g_app.lay.max_box = {0, 0, 0, 0};
 
     paint_chrome(cv, g_app.lay, "", g_app.focused, g_app.hot_box,
-                 g_app.pressed_box, nullptr);
+                 g_app.pressed_box, settings::active_theme());
 
-    // Centered butterfly glyph + "KDX" title, as in the real window.
+    // Centered butterfly glyph + "KDX" title (Primary Label, like chrome).
     {
         const char *title = "KDX";
         int tw = kLogoW + 6 + cv.text_width(title);
         int tx = (w - tw) / 2;
-        Color tc = g_app.focused ? kWhite : Color{204, 204, 204};
+        const Theme *theme = settings::active_theme();
+        Color tc = g_app.focused ? kWhite : kGlyphGrey;
+        if (theme && theme->has_colors) {
+            uint32_t v = theme->color(g_app.focused ? ColPrimaryLabel
+                                                    : ColPrimaryDisableLabel);
+            tc = from_u32(v);
+        }
         for (int y = 0; y < kLogoH; ++y)
             for (int x = 0; x < kLogoW; ++x)
                 if (kLogoGlyph[y] & (1 << x)) cv.put(tx + x, 5 + y, pack(tc));
         cv.text(tx + kLogoW + 6, 4, title, tc);
     }
 
-    DialogColors dc = dialog_colors(nullptr);
+    DialogColors dc = dialog_colors(settings::active_theme());
     cv.fill(g_app.lay.client, dc.workspace);
 
     blit_art(cv, kMedallion);
@@ -1356,10 +1850,16 @@ void menu_chosen(int id) {
             open_host_room(g_hinst);
             break;
         case CmdStopHosting:
-            host_room::stop_hosting();
+            disconnect_server();
             break;
         case CmdConnect:
             open_tracker(g_hinst);
+            break;
+        case CmdChat:
+            open_chat();
+            break;
+        case CmdSettings:
+            open_settings(g_hinst);
             break;
         case CmdAbout:
             MessageBoxA(g_main,
@@ -1392,10 +1892,10 @@ void open_commands_menu(int button) {
         {"File Transfers", CmdTransfers, false, icon_of(kIcTransfers), "^T",
          false},
         {"File Browser", CmdBrowser, false, icon_of(kIcBrowser), "^F", false},
-        {"Chat", CmdChat, false, icon_of(kIcChat), "^H", false},
+        {"Chat", CmdChat, true, icon_of(kIcChat), "^H", false},
         {"News", CmdNews, false, icon_of(kIcNews), "^N", false},
         {"User List", CmdUserList, false, icon_of(kIcUsers), "^U", false},
-        {"Settings", CmdSettings, false, icon_of(kIcSettings), "^;", false},
+        {"Settings", CmdSettings, true, icon_of(kIcSettings), "^;", false},
         {"Show My Address", CmdShowAddress, false, {}, "", false},
         {"About", CmdAbout, true, icon_of(kIcAbout), "", false},
         {"Exit", CmdExit, true, icon_of(kIcExit), "^Q", false},
@@ -1417,6 +1917,10 @@ void run_command(int i, HWND hwnd) {
         open_tracker(g_hinst);
         return;
     }
+    if (lstrcmpA(name, "Chat") == 0) {
+        open_chat();
+        return;
+    }
     // Remaining commands come online one at a time.
     char msg[128];
     wsprintfA(msg, "\"%s\" is not wired up yet.", name);
@@ -1424,6 +1928,7 @@ void run_command(int i, HWND hwnd) {
 }
 
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto min_main = [](HWND h) { dock_minimize(h, "KDX", &kIcCommands); };
     switch (msg) {
         case WM_NCCALCSIZE:
             if (wp) return 0;
@@ -1432,12 +1937,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return HTCLIENT;
         case WM_LBUTTONDOWN: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g_app.lay.min_box.contains(x, y)) {
-                g_app.pressed_box = 4;
-                SetCapture(hwnd);
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (chrome_press(hwnd, g_app.lay, g_app.pressed_box,
+                             g_app.title_drag, x, y))
                 return 0;
-            }
             int b = button_at(x, y);
             if (b >= 0) {
                 g_app.pressed_btn = b;
@@ -1452,19 +1954,25 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return 0;
             }
-            if (y < g_app.lay.title_h)
-                SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE + 2, lp);
             return 0;
         }
+        case WM_LBUTTONDBLCLK: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            if (y < g_app.lay.title_h &&
+                chrome_box_at(g_app.lay, x, y) == ChromeNone)
+                min_main(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (g_app.title_drag.armed)
+                g_app.title_drag.maybe_drag(hwnd, GET_X_LPARAM(lp),
+                                            GET_Y_LPARAM(lp), lp);
+            return 0;
         case WM_LBUTTONUP: {
             int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-            if (g_app.pressed_box == 4) {
-                ReleaseCapture();
-                g_app.pressed_box = 0;
-                InvalidateRect(hwnd, nullptr, FALSE);
-                if (g_app.lay.min_box.contains(x, y)) CloseWindow(hwnd);
+            if (chrome_release(g_app.lay, g_app.pressed_box, g_app.title_drag,
+                               x, y, hwnd, nullptr, min_main))
                 return 0;
-            }
             if (g_app.pressed_btn >= 0) {
                 ReleaseCapture();
                 int was = g_app.pressed_btn;
@@ -1480,14 +1988,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (GetKeyState(VK_CONTROL) & 0x8000) {
                 if (wp == 'K') open_tracker(g_hinst);
                 if (wp == 'R') open_host_room(g_hinst);
+                if (wp == 'H') open_chat();
+                if (wp == VK_OEM_1) open_settings(g_hinst);  // Ctrl+;
                 if (wp == 'Q') DestroyWindow(hwnd);
             }
             return 0;
         case WM_TIMER: {
-            if (wp == 2) {  // keeps our tracker listing from lapsing
-                tracker::heartbeat(host_room::g.hosting);
-                return 0;
-            }
             bool f = GetForegroundWindow() == hwnd;
             if (f != g_app.focused) {
                 g_app.focused = f;
@@ -1495,6 +2001,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case room::WM_ROOM_EVENT:
+            // Chat is closed; keep the launcher counters fresh while we stay
+            // connected in the background.
+            refresh_connection_count();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case WM_ACTIVATE:
         case WM_SETFOCUS:
         case WM_KILLFOCUS:
@@ -1510,7 +2022,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_EXITSIZEMOVE:
+            winpos::remember(hwnd, "kdx", false);
+            return 0;
         case WM_DESTROY:
+            winpos::remember(hwnd, "kdx", false);
+            disconnect_server();
             PostQuitMessage(0);
             return 0;
     }
@@ -1523,21 +2040,26 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE, LPSTR, int show) {
     g_hinst = hinst;
 
     WNDCLASSA wc{};
+    wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = hinst;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.lpszClassName = "SagradoKDX";
     RegisterClassA(&wc);
 
+    int x = 80, y = 80, w = kWinW, h = kWinH;
+    winpos::resolve("kdx", x, y, w, h, false);
     HWND hwnd = CreateWindowExA(0, "SagradoKDX", "KDX",
-                                WS_POPUP | WS_MINIMIZEBOX, CW_USEDEFAULT,
-                                CW_USEDEFAULT, kWinW, kWinH, nullptr, nullptr,
-                                hinst, nullptr);
+                                WS_POPUP | WS_MINIMIZEBOX, x, y, w, h, nullptr,
+                                nullptr, hinst, nullptr);
     g_main = hwnd;
     room::init();
+    settings::boot();
+    winpos::load();
+    settings::invalidate_all = invalidate_all_windows;
+    kit_theme_fn = &settings::active_theme;
     ShowWindow(hwnd, show);
     SetTimer(hwnd, 1, 250, nullptr);
-    SetTimer(hwnd, 2, 30000, nullptr);
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0) {

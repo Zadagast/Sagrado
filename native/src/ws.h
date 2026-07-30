@@ -3,16 +3,21 @@
 // behind any router without forwarding a port. Blocking by design — callers
 // run it on a worker thread and post results back to the window.
 //
-// KNOWN BUG (Wine only, reproducible with build/test_ws.exe): while this
+// FIXED (listing heartbeat): the host keeps its tracker listing alive by
+// sending kind-4 frames on this socket (see room.h), so hosting no longer
+// issues a concurrent WinHTTP request to the same tracker.
+//
+// STILL AFOOT (Wine only, reproducible with build/test_ws.exe): while this
 // socket is open, an ordinary WinHTTP request to the same tracker corrupts the
 // frame stream — the relay rejects the next frame ("RSV bits set" / "the
 // compression bit was set") and drops the connection. It looks like Wine's
 // global keep-alive pool handing the WebSocket's connection to the HTTP
 // request; neither WINHTTP_DISABLE_KEEP_ALIVE on both handles nor holding the
 // upgrade request handle open for the socket's lifetime (both done below)
-// fixes it. Native Windows is unaffected. Likely fixes: stop making HTTP
-// calls while hosting (move the tracker heartbeat onto the relay socket), or
-// replace WinHTTP here with a Winsock WebSocket plus Schannel for wss://.
+// fixes it. Native Windows is unaffected. Callers must not HTTP the tracker
+// while this socket is live (register before open, /remove after close). A
+// full cure would replace WinHTTP here with a Winsock WebSocket plus Schannel
+// for wss://.
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
@@ -118,6 +123,16 @@ class Client {
 
     bool send(const std::string &s) { return send(s.data(), s.size()); }
 
+    // Unblock a receive() sitting on another thread. Safe to call from the UI
+    // thread: it only starts the close handshake and does not tear handles
+    // down. close() must run after receive has returned (see room::leave).
+    void interrupt() {
+        if (!socket_) return;
+        WinHttpWebSocketShutdown(socket_,
+                                 WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,
+                                 nullptr, 0);
+    }
+
     // Blocks until a whole message arrives (fragments are reassembled), the
     // peer closes, or the socket breaks.
     bool receive(std::vector<uint8_t> &out) {
@@ -150,8 +165,9 @@ class Client {
 
     void close() {
         if (socket_) {
-            WinHttpWebSocketClose(socket_, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,
-                                  nullptr, 0);
+            // Handles only — the close handshake was interrupt() or the peer.
+            // Calling WinHttpWebSocketClose here while another thread is in
+            // Receive deadlocks under Wine (and can hang native WinHTTP too).
             WinHttpCloseHandle(socket_);
             socket_ = nullptr;
         }
